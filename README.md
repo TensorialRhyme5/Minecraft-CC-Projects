@@ -3,7 +3,7 @@
 ComputerCraft (CC: Tweaked) builds. Each folder is one project with its own installer.
 
 ## Space Voyage
-3D visualizer: fly through a starfield toward a warping wireframe shape. Made for an 8x6 advanced monitor (works on any size).
+3D visualizer: fly through space past planets, UFOs, rockets, comets, asteroids and nebulae toward a wireframe shape that warps through 14 forms, each in its own colour. Made for an 8x6 advanced monitor (works on any size).
 
 Install on an advanced computer touching (or wired to) the monitor:
 ```
