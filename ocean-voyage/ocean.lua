@@ -425,13 +425,15 @@ local function render(t, dt)
   end
 
   -- merge moving things with the background and draw
-  local touched = {}
+  local touched, touchedZ = {}, {}
   for k, col in pairs(pc) do
     local px, py = k % PW, math.floor(k / PW)
     local ck = math.floor(py / 3) * W + math.floor(px / 2)
     local cell = touched[ck]
-    if not cell then cell = {}; touched[ck] = cell end
-    cell[(py % 3) * 2 + px % 2] = col
+    if not cell then cell = {}; touched[ck] = cell; touchedZ[ck] = {} end
+    local i = (py % 3) * 2 + px % 2
+    cell[i] = col
+    touchedZ[ck][i] = pz[k]
   end
   for _, m in ipairs(mons) do m.rows = m.rows or {} end
   for y = 0, H - 1 do
@@ -440,8 +442,18 @@ local function render(t, dt)
     for x = 0, W - 1 do
       local cell = touched[y * W + x]
       if cell then
+        -- A cell can only show 2 colours and the water already uses 2 (it's dithered), so where a
+        -- creature overlaps water the water becomes one flat shade and the creature keeps its colour.
+        local hasBg, nearCol, nearZ = false, nil, math.huge
+        local cz = touchedZ[y * W + x]
         for i = 0, 5 do
-          if not cell[i] then cell[i] = bgPix[(y * 3 + math.floor(i / 2)) * PW + x * 2 + i % 2] end
+          if cell[i] then
+            if cz[i] < nearZ then nearZ, nearCol = cz[i], cell[i] end
+          else hasBg = true end
+        end
+        if hasBg then
+          local dom = rb[x + 1]
+          for i = 0, 5 do cell[i] = cell[i] and nearCol or dom end
         end
         c[x + 1], f[x + 1], b[x + 1] = reduce(cell)
       else
