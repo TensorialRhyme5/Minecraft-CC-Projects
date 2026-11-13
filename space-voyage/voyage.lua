@@ -8,7 +8,7 @@
 local CFG = {
   textScale = 0.5,
   frame     = 0.1,    -- seconds per frame
-  stars     = 420,
+  stars     = 520,
   points    = 720,    -- points per shape (more = smoother lines)
   speed     = 0.35,   -- cruising speed through the starfield
   hold      = 6,      -- seconds a shape stays before warping
@@ -25,8 +25,8 @@ if #mons == 0 then error("No advanced monitor found. Attach one to this computer
 -- ---------------------------------------------------------- palette
 -- f background, c/7/8/0 star depth ramp (far -> near), 2/a/b/9/3 shape depth ramp (far -> near)
 local PAL = {
-  [colors.black] = 0x020308, [colors.brown] = 0x1a1c28, [colors.gray] = 0x3a3e54,
-  [colors.lightGray] = 0x8a90b0, [colors.white] = 0xf4f6ff,
+  [colors.black] = 0x020308, [colors.brown] = 0x3c4058, [colors.gray] = 0x6c7292,
+  [colors.lightGray] = 0xa8b0d0, [colors.white] = 0xf4f6ff,
 }
 local SHAPE_SLOTS = { colors.magenta, colors.purple, colors.blue, colors.cyan, colors.lightBlue } -- far -> near
 local SHAPE_CH = { "2", "a", "b", "9", "3" }
@@ -213,10 +213,20 @@ local function render(t, dt)
       newStar(s, true)
     else
       local col = s.z > 0.7 and STAR_CH[1] or (s.z > 0.42 and STAR_CH[2] or (s.z > 0.2 and STAR_CH[3] or STAR_CH[4]))
-      local tail = math.min(z0 + speed * dt * (boost > 1 and 3 or 1.5), 1)
-      local qx, qy = cx + rx / tail * focal, cy + ry / tail * focal
-      if s.z < 0.45 or boost > 1 then line(qx, qy, px, py, 5 + s.z, col)   -- streaks when close / boosting
-      else plot(px, py, 5 + s.z, col) end
+      local zz = 5 + s.z                                     -- stars always sit behind the shape
+      plot(px, py, zz, col)
+      if s.z < 0.2 then plot(px + 1, py, zz, col) end        -- close stars are a little bigger
+      if s.z < 0.12 then plot(px, py + 1, zz, col); plot(px + 1, py + 1, zz, col) end
+      -- short faint trail only for very close stars (long streaks only while boosting)
+      local maxLen = boost > 1 and 22 or (s.z < 0.18 and 4 or 0)
+      if maxLen > 0 then
+        local dx, dy = px - cx, py - cy
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 0 then
+          local tl = math.min(maxLen, len * 0.15)
+          line(px - dx / len * tl, py - dy / len * tl, px, py, zz + 0.5, boost > 1 and col or STAR_CH[1])
+        end
+      end
     end
   end
 
