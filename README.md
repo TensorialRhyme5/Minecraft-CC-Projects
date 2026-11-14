@@ -20,3 +20,15 @@ wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/mai
 reboot
 ```
 Tap the screen for a burst of bubbles. Q on the computer = quit.
+
+## Storage Manager
+Tracks every storage chest on the wired network (made for 16 Sophisticated Storage iron double chests on a 6x3 monitor).
+Search with the on-screen keyboard or by typing on the computer, see where items are, send 1/16/64/all to the pickup barrel,
+set low-stock alerts, and dump items into the input chest to have them filed away automatically.
+
+Input chest `minecraft:chest_0`, pickup barrel `minecraft:barrel_0` (change at the top of `storage/storage.lua`).
+
+```
+wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/startup.lua startup.lua
+reboot
+```
