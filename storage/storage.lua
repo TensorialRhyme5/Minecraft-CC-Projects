@@ -233,6 +233,52 @@ local function retrieve(id, want)
   return moved
 end
 
+-- ORGANIZE: gather each item into one "home" chest (the one already holding the most of it),
+-- then merge its partial stacks there so they take as few slots as possible.
+local busy = nil              -- progress text while organizing
+local function organize()
+  scan()
+  local ids = {}
+  for id in pairs(index) do ids[#ids + 1] = id end
+  table.sort(ids)
+  local moves, freed0 = 0, stats.used
+  for n, id in ipairs(ids) do
+    busy = "Organizing " .. n .. "/" .. #ids .. "  " .. (data.names[id] or prettyId(id))
+    local e = index[id]
+    if e then
+      local per = {}
+      for _, l in ipairs(e.locs) do per[l.inv] = (per[l.inv] or 0) + l.count end
+      local home, best = nil, -1
+      for inv, c in pairs(per) do if c > best or (c == best and inv < home) then home, best = inv, c end end
+      -- 1) pull stacks from other chests into the home chest
+      for _, l in ipairs(e.locs) do
+        if l.inv ~= home then
+          local ok, m = pcall(peripheral.call, l.inv, "pushItems", home, l.slot)
+          if ok and type(m) == "number" and m > 0 then moves = moves + 1 end
+        end
+      end
+      -- 2) merge partial stacks inside the home chest
+      local ok, list = pcall(peripheral.call, home, "list")
+      if ok and type(list) == "table" then
+        local slots = {}
+        for slot, it in pairs(list) do if it.name == id then slots[#slots + 1] = slot end end
+        table.sort(slots)
+        local first, last = 1, #slots
+        while first < last do
+          local ok2, m = pcall(peripheral.call, home, "pushItems", home, slots[last], nil, slots[first])
+          if ok2 and type(m) == "number" and m > 0 then moves = moves + 1 end
+          local ok3, d = pcall(peripheral.call, home, "getItemDetail", slots[last])
+          if not (ok3 and d) then last = last - 1          -- emptied that stack
+          else first = first + 1 end                       -- target stack is full, move to the next
+        end
+      end
+    end
+  end
+  busy = nil
+  scan()
+  return moves, freed0 - stats.used
+end
+
 local function sortInput()
   if not peripheral.isPresent(CFG.input) then return 0, 0 end
   local ok, l = pcall(peripheral.call, CFG.input, "list")
@@ -299,7 +345,13 @@ local function drawSearchBar()
   fill(LX1, 5, LX2, 5, PANEL)
   local q = UI.search == "" and "tap letters or type to search" or UI.search
   text(LX1 + 1, 5, "Search:", YELLOW, PANEL)
-  text(LX1 + 9, 5, fit(q, LX2 - LX1 - 30) .. (UI.search ~= "" and "_" or ""), UI.search == "" and GRAY or WHITE, PANEL)
+  text(LX1 + 9, 5, fit(q, LX2 - LX1 - 46) .. (UI.search ~= "" and "_" or ""), UI.search == "" and GRAY or WHITE, PANEL)
+  button("organize", LX2 - 33, 5, LX2 - 21, 5, busy and "WORKING" or "ORGANIZE", BLACK, busy and YELLOW or LIME, function()
+    if not busy then
+      busy = "Organizing..."
+      queue({ kind = "organize" })
+    end
+  end)
   button("sortCount", LX2 - 19, 5, LX2 - 11, 5, "COUNT", data.sort == "count" and BLACK or LGRAY,
     data.sort == "count" and CYAN or GRAY, function() data.sort = "count"; save(); rebuildList() end)
   button("sortName", LX2 - 9, 5, LX2, 5, "A-Z", data.sort == "name" and BLACK or LGRAY,
@@ -344,7 +396,10 @@ local function drawList()
   local pg = "page " .. UI.page .. "/" .. pages .. "   " .. #items .. " shown"
   text(LX1 + math.floor((LX2 - LX1 - #pg) / 2), py, pg, LGRAY)
   local age = now() - status.at
-  if age < 20 then text(LX1 + math.floor((LX2 - LX1 - #status.msg) / 2), H, fit(status.msg, LX2 - LX1 - 24), status.col) end
+  if busy then
+    local b = fit(busy, LX2 - LX1 - 24)
+    text(LX1 + math.floor((LX2 - LX1 - #b) / 2), H, b, YELLOW)
+  elseif age < 20 then text(LX1 + math.floor((LX2 - LX1 - #status.msg) / 2), H, fit(status.msg, LX2 - LX1 - 24), status.col) end
 end
 
 local KEYS = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" }
@@ -461,7 +516,12 @@ local function worker()
   while true do
     if #tasks > 0 then
       local t = table.remove(tasks, 1)
-      if t.kind == "retrieve" then
+      if t.kind == "organize" then
+        setStatus("Organizing storage...", YELLOW)
+        local moves, freed = organize()
+        setStatus("Organized! " .. commas(moves) .. " moves, freed " .. commas(math.max(0, freed)) .. " slots", LIME)
+        if speaker then pcall(speaker.playNote, "chime", 1, 12) end
+      elseif t.kind == "retrieve" then
         local n = retrieve(t.id, t.n)
         local name = data.names[t.id] or prettyId(t.id)
         if n > 0 then
@@ -529,7 +589,8 @@ print("Type to search, Backspace to delete,")
 print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
-    items = function() return items end, stats = function() return stats end, data = data, status = status }
+    items = function() return items end, stats = function() return stats end, data = data, status = status,
+    busy = function() return busy end }
 end
 
 parallel.waitForAny(ui, worker)
