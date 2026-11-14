@@ -7,7 +7,7 @@
 
 local CFG = {
   input      = "minecraft:chest_0",    -- dump items here, they get filed away
-  pickup     = "minecraft:barrel_0",   -- retrieved items are sent here
+  pickup     = "minecraft:barrel_0",   -- usual pickup barrel (any barrel works if this one is replaced)
   textScale  = 0.5,
   scanEvery  = 10,                     -- seconds between full re-scans
   sortEvery  = 2,                      -- seconds between input-chest checks
@@ -113,8 +113,22 @@ local stats = { slots = 0, used = 0, total = 0, types = 0, scanned = 0 }
 local status = { msg = "Scanning storage...", col = LGRAY, at = 0 }
 local function setStatus(msg, col) status.msg, status.col, status.at = msg, col or LGRAY, now() end
 
+-- the pickup spot can hold a barrel OR a Sophisticated Backpack; neither is ever used as storage
+local function isPickupName(name)
+  return name == CFG.pickup or name:find("^minecraft:barrel") ~= nil or name:find("^sophisticatedbackpacks:") ~= nil
+end
+local function currentPickup()
+  local barrel
+  for _, name in ipairs(peripheral.getNames()) do
+    if name:find("^sophisticatedbackpacks:") then return name, "BACKPACK" end   -- a docked backpack wins
+    if not barrel and (name == CFG.pickup or name:find("^minecraft:barrel")) then barrel = name end
+  end
+  if peripheral.isPresent(CFG.pickup) then barrel = CFG.pickup end
+  return barrel, barrel and "BARREL" or nil
+end
+
 local function isInventory(name)
-  if name == CFG.input or name == CFG.pickup then return false end
+  if name == CFG.input or isPickupName(name) then return false end
   if monNames[name] then return false end
   if peripheral.hasType then
     local ok, has = pcall(peripheral.hasType, name, "inventory")
@@ -223,10 +237,12 @@ local function queue(t) tasks[#tasks + 1] = t; os.queueEvent("storage_task") end
 local function retrieve(id, want)
   local e = index[id]
   if not e then return 0 end
+  local target = currentPickup()
+  if not target then return 0, "no barrel or backpack connected" end
   local moved = 0
   for _, l in ipairs(e.locs) do
     if moved >= want then break end
-    local ok, n = pcall(peripheral.call, l.inv, "pushItems", CFG.pickup, l.slot, math.min(want - moved, l.count))
+    local ok, n = pcall(peripheral.call, l.inv, "pushItems", target, l.slot, math.min(want - moved, l.count))
     if ok and type(n) == "number" then moved = moved + n end
     if ok and n == 0 then break end                             -- pickup barrel is full
   end
@@ -469,7 +485,9 @@ local function drawDetail()
   end
   if #invs > 5 then text(RX1 + 1, 17, "+" .. (#invs - 5) .. " more", GRAY, PANEL) end
   -- retrieve
-  text(RX1, 19, "SEND TO PICKUP BARREL", YELLOW, PANEL)
+  local _, kind = currentPickup()
+  text(RX1, 19, "SEND TO PICKUP", YELLOW, PANEL)
+  text(RX1 + 15, 19, kind and (string.char(16) .. " " .. kind) or "(none connected!)", kind == "BACKPACK" and CYAN or (kind and LIME or RED), PANEL)
   local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
   for i, a in ipairs(amounts) do
     local x = RX1 + (i - 1) * 10
@@ -522,13 +540,15 @@ local function worker()
         setStatus("Organized! " .. commas(moves) .. " moves, freed " .. commas(math.max(0, freed)) .. " slots", LIME)
         if speaker then pcall(speaker.playNote, "chime", 1, 12) end
       elseif t.kind == "retrieve" then
-        local n = retrieve(t.id, t.n)
+        local n, why = retrieve(t.id, t.n)
         local name = data.names[t.id] or prettyId(t.id)
+        local _, kind = currentPickup()
+        local where = kind == "BACKPACK" and "backpack" or "barrel"
         if n > 0 then
-          setStatus("Sent " .. commas(n) .. " " .. name .. " to the pickup barrel", LIME)
+          setStatus("Sent " .. commas(n) .. " " .. name .. " to the " .. where, LIME)
           if speaker then pcall(speaker.playNote, "pling", 0.8, 12) end
         else
-          setStatus("Couldn't send " .. name .. " (barrel full or none left)", RED)
+          setStatus("Couldn't send " .. name .. " (" .. (why or (where .. " full or none left")) .. ")", RED)
         end
         scan()
       end
@@ -583,7 +603,8 @@ term.clear(); term.setCursorPos(1, 1)
 term.setTextColour(colors.yellow); print("STORAGE MANAGER")
 term.setTextColour(colors.white)
 print("Input chest:  " .. CFG.input .. (peripheral.isPresent(CFG.input) and "" or "  (NOT FOUND)"))
-print("Pickup barrel: " .. CFG.pickup .. (peripheral.isPresent(CFG.pickup) and "" or "  (NOT FOUND)"))
+local pk, pkind = currentPickup()
+print("Pickup:       " .. (pk and (pk .. " (" .. pkind:lower() .. ")") or "NOT FOUND - place a barrel or backpack"))
 term.setTextColour(colors.lightGray)
 print("Type to search, Backspace to delete,")
 print("Enter to clear. Hold Ctrl+T to stop.")

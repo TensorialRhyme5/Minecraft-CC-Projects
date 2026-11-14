@@ -27,6 +27,7 @@ Search with the on-screen keyboard or by typing on the computer, see where items
 set low-stock alerts, and dump items into the input chest to have them filed away automatically.
 
 Input chest `minecraft:chest_0`, pickup barrel `minecraft:barrel_0` (change at the top of `storage/storage.lua`).
+You can swap the pickup barrel for a placed Sophisticated Backpack: retrieved items go into the backpack, then put any barrel back.
 
 ```
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/startup.lua startup.lua
