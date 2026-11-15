@@ -148,11 +148,204 @@ local function findStorages()
   table.sort(storages)
 end
 
-local UI = { search = "", page = 1, selected = nil, perPage = 0, lowAlerted = {} }
+-- ---------------------------------------------------------- recipe book
+-- recipes.txt is built from the modpack (mod jars + KubeJS scripts) and lives in the repo.
+-- It is downloaded into memory at startup, so it never uses the computer's disk space.
+local RECIPE_URL = "https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/recipes.txt"
+local R = {
+  state = "loading", msg = "Loading recipe book...",
+  id = {}, name = {}, byId = {},       -- item index <-> id / display name
+  tagName = {}, tagRaw = {}, tagMem = {},
+  grpRaw = {}, grpMem = {},           -- ingredient groups ("3,t12" -> list of item indexes)
+  byOut = {},                         -- item index -> { {n=, k=, g=raw}, ... }
+  outs = {},                          -- sorted list of craftable item indexes
+}
+
+local function rYield(i) if i % 2000 == 0 then os.queueEvent("recipe_yield"); os.pullEvent("recipe_yield") end end
+
+local function loadRecipes()
+  R.state, R.msg = "loading", "Downloading recipe book..."
+  local ok, h = pcall(http.get, RECIPE_URL .. "?t=" .. os.epoch("utc"))
+  if not ok or not h then R.state, R.msg = "failed", "Recipe download failed (tap RECIPES to retry)"; return end
+  local body = h.readAll(); h.close()
+  if not body or #body < 1000 then R.state, R.msg = "failed", "Recipe file was empty (tap RECIPES to retry)"; return end
+  R.msg = "Reading recipe book..."
+  local id, name, byId, tagName, tagRaw, grpRaw, byOut = {}, {}, {}, {}, {}, {}, {}
+  local ni, nt, ng, i = 0, 0, 0, 0
+  for line in body:gmatch("[^\n]+") do
+    i = i + 1; rYield(i)
+    local kind = line:sub(1, 1)
+    if kind == "R" then
+      local out, n, k, g = line:match("^R\t(%d+)\t(%d+)\t(%a)\t(.*)$")
+      if out then
+        out = tonumber(out)
+        local l = byOut[out]; if not l then l = {}; byOut[out] = l end
+        l[#l + 1] = { n = tonumber(n), k = k, g = g }
+      end
+    elseif kind == "G" then ng = ng + 1; grpRaw[ng] = line:sub(3)
+    elseif kind == "I" then
+      local a, b = line:match("^I\t([^\t]+)\t(.*)$")
+      ni = ni + 1; id[ni] = a; name[ni] = b; byId[a] = ni
+    elseif kind == "T" then
+      local a, b = line:match("^T\t([^\t]+)\t(.*)$")
+      nt = nt + 1; tagName[nt] = a; tagRaw[nt] = b or ""
+    end
+  end
+  body = nil
+  local seenName = {}                             -- two items called "Chest"? add the mod name
+  for j = 1, ni do seenName[name[j]] = (seenName[name[j]] or 0) + 1 end
+  for j = 1, ni do
+    if seenName[name[j]] > 1 then name[j] = name[j] .. " (" .. (id[j]:match("^([^:]+)") or "?") .. ")" end
+  end
+  local outs = {}
+  for o in pairs(byOut) do outs[#outs + 1] = o end
+  table.sort(outs, function(a, b) return name[a] < name[b] end)
+  R.id, R.name, R.byId, R.tagName, R.tagRaw, R.grpRaw, R.byOut, R.outs = id, name, byId, tagName, tagRaw, grpRaw, byOut, outs
+  R.tagMem, R.grpMem = {}, {}
+  R.lower = {}
+  for j, o in ipairs(outs) do R.lower[j] = name[o]:lower() .. "\0" .. id[o] end
+  R.state, R.msg = "ready", #outs .. " craftable items, " .. i .. " lines"
+end
+
+local function splitNums(s)
+  local t = {}
+  for v in s:gmatch("[^,]+") do t[#t + 1] = v end
+  return t
+end
+local function tagMembers(t)
+  local m = R.tagMem[t]
+  if not m then
+    m = {}
+    for _, v in ipairs(splitNums(R.tagRaw[t] or "")) do m[#m + 1] = tonumber(v) end
+    R.tagMem[t] = m
+  end
+  return m
+end
+-- every item that can fill an ingredient slot
+local function groupItems(g)
+  local m = R.grpMem[g]
+  if not m then
+    m = {}
+    local seen = {}
+    for _, tok in ipairs(splitNums(R.grpRaw[g] or "")) do
+      if tok:sub(1, 1) == "t" then
+        for _, it in ipairs(tagMembers(tonumber(tok:sub(2)))) do if not seen[it] then seen[it] = true; m[#m + 1] = it end end
+      else
+        local it = tonumber(tok)
+        if not seen[it] then seen[it] = true; m[#m + 1] = it end
+      end
+    end
+    R.grpMem[g] = m
+  end
+  return m
+end
+local function groupLabel(g)                      -- "#c:ingots/iron" or the item's name
+  local tok = (R.grpRaw[g] or ""):match("^[^,]+") or ""
+  if tok:sub(1, 1) == "t" then return "#" .. (R.tagName[tonumber(tok:sub(2))] or "?") end
+  return R.name[tonumber(tok)] or "?"
+end
+local function itemName(i)                        -- recipe item index -> display name
+  local id = R.id[i]
+  return (id and data.names[id]) or R.name[i] or "?"
+end
+local function stock(i) local e = index[R.id[i] or ""]; return e and e.count or 0 end
+
+-- slots of a recipe: list of 9 (shaped, 0 = empty) or n (shapeless) group numbers
+local function recipeSlots(rc)
+  if not rc.slots then
+    rc.slots = {}
+    for _, v in ipairs(splitNums(rc.g)) do rc.slots[#rc.slots + 1] = tonumber(v) end
+  end
+  return rc.slots
+end
+
+-- Work out which items to pull for `crafts` crafts. Tags/alternatives use whatever is in stock,
+-- most-stocked first, and may mix (e.g. oak + birch planks both work in a planks slot).
+local function craftPlan(rc, crafts)
+  local need = {}
+  local order = {}
+  for _, g in ipairs(recipeSlots(rc)) do
+    if g > 0 then
+      if not need[g] then need[g] = 0; order[#order + 1] = g end
+      need[g] = need[g] + crafts
+    end
+  end
+  table.sort(order, function(a, b) return #groupItems(a) < #groupItems(b) end)   -- pickiest slots first
+  local used, take, missing, pick = {}, {}, {}, {}
+  for _, g in ipairs(order) do
+    local opts = {}
+    for _, it in ipairs(groupItems(g)) do
+      local free = stock(it) - (used[it] or 0)
+      if free > 0 then opts[#opts + 1] = { it = it, free = free } end
+    end
+    table.sort(opts, function(a, b) return a.free > b.free end)
+    local left = need[g]
+    for _, o in ipairs(opts) do
+      if left <= 0 then break end
+      local n = math.min(left, o.free)
+      used[o.it] = (used[o.it] or 0) + n
+      take[o.it] = (take[o.it] or 0) + n
+      pick[g] = pick[g] or o.it
+      left = left - n
+    end
+    if left > 0 then missing[g] = left end
+  end
+  local list, short = {}, 0
+  for it, n in pairs(take) do list[#list + 1] = { it = it, n = n } end
+  for _, n in pairs(missing) do short = short + n end
+  return { take = list, missing = missing, need = need, order = order, pick = pick, short = short }
+end
+local function canCraft(rc, crafts) return craftPlan(rc, crafts or 1).short == 0 end
+local pickupFree = nil        -- free slots in the pickup barrel/backpack (nil = unknown)
+local function fitsPickup(plan)
+  if not pickupFree then return true end
+  local slots = 0
+  for _, x in ipairs(plan.take) do slots = slots + math.ceil(x.n / 64) end
+  return slots <= pickupFree
+end
+local function okCrafts(rc, n) local p = craftPlan(rc, n); return p.short == 0 and fitsPickup(p) end
+local function maxCrafts(rc)                      -- most crafts you have items for AND that fit in the pickup
+  if not okCrafts(rc, 1) then return canCraft(rc, 1) and 1 or 0 end
+  local canCraft = okCrafts
+  local lo, hi = 1, 2
+  while hi <= 4096 and canCraft(rc, hi) do lo = hi; hi = hi * 2 end
+  if hi > 4096 then return 4096 end
+  while hi - lo > 1 do local mid = math.floor((lo + hi) / 2); if canCraft(rc, mid) then lo = mid else hi = mid end end
+  return lo
+end
+-- best recipe to show first: one you can make, else the one missing the least
+local function rankRecipes(out)
+  local l = R.byOut[out] or {}
+  local ranked = {}
+  for _, rc in ipairs(l) do ranked[#ranked + 1] = { rc = rc, short = craftPlan(rc, 1).short } end
+  table.sort(ranked, function(a, b) return a.short < b.short end)
+  local res = {}
+  for i, r in ipairs(ranked) do res[i] = r.rc end
+  return res
+end
+
+local UI = { search = "", page = 1, selected = nil, perPage = 0, lowAlerted = {},
+  mode = "items", rsel = nil, rvar = 1, crafts = 1, canMake = false }
 
 local function rebuildList()
   items = {}
   local q = UI.search:lower()
+  if UI.mode == "recipes" then
+    if R.state ~= "ready" then return end
+    local only = UI.canMake and R.canSet
+    for j, o in ipairs(R.outs) do
+      if (q == "" or R.lower[j]:find(q, 1, true)) and (not UI.canMake or (only and only[o])) then
+        local nm = R.name[o]
+        local l = nm:lower():gsub(" %(.*%)$", "")
+        local rank = q == "" and 2 or (l == q and 0 or (l:sub(1, #q) == q and 1 or 2))
+        items[#items + 1] = { ri = o, name = nm, rank = rank }
+      end
+    end
+    if q ~= "" then
+      table.sort(items, function(a, b) if a.rank ~= b.rank then return a.rank < b.rank end return a.name < b.name end)
+    end
+    return
+  end
   for id, it in pairs(index) do
     local name = data.names[id] or prettyId(id)
     if q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true) then
@@ -193,6 +386,18 @@ local function scan()
     end
   end
   index = newIndex
+  R.ready = {}
+  local pk = currentPickup()
+  pickupFree = nil
+  if pk then
+    local ok, l = pcall(peripheral.call, pk, "list")
+    local ok2, sz = pcall(peripheral.call, pk, "size")
+    if ok and ok2 and type(l) == "table" and type(sz) == "number" then
+      local used = 0
+      for _ in pairs(l) do used = used + 1 end
+      pickupFree = sz - used
+    end
+  end
   local types = 0
   for _ in pairs(index) do types = types + 1 end
   stats = { slots = slots, used = used, total = total, types = types, scanned = now(), chests = #storages }
@@ -357,11 +562,31 @@ local function drawHeader()
   for x = 1, W do setCell(x, 4, "\140", YELLOW, BLACK) end
 end
 
+local function setMode(m)
+  UI.mode = m; UI.page = 1; UI.selected = nil; UI.rsel = nil
+  if m == "recipes" and R.state == "failed" then R.state = "loading"; queue({ kind = "loadrecipes" }) end
+  rebuildList()
+end
 local function drawSearchBar()
   fill(LX1, 5, LX2, 5, PANEL)
-  local q = UI.search == "" and "tap letters or type to search" or UI.search
+  local rec = UI.mode == "recipes"
+  local q = UI.search == "" and (rec and "search recipes" or "tap letters or type to search") or UI.search
   text(LX1 + 1, 5, "Search:", YELLOW, PANEL)
-  text(LX1 + 9, 5, fit(q, LX2 - LX1 - 46) .. (UI.search ~= "" and "_" or ""), UI.search == "" and GRAY or WHITE, PANEL)
+  text(LX1 + 9, 5, fit(q, LX2 - LX1 - 58) .. (UI.search ~= "" and "_" or ""), UI.search == "" and GRAY or WHITE, PANEL)
+  button("mode", LX2 - 47, 5, LX2 - 36, 5, rec and "ITEMS" or "RECIPES", BLACK, rec and CYAN or PURPLE, function()
+    setMode(rec and "items" or "recipes")
+  end)
+  if rec then
+    button("canmake", LX2 - 33, 5, LX2 - 21, 5, "CAN MAKE", UI.canMake and BLACK or LGRAY, UI.canMake and LIME or GRAY, function()
+      UI.canMake = not UI.canMake; UI.page = 1
+      if UI.canMake and R.state == "ready" then
+        if R.canSig ~= stats.total .. ":" .. stats.types then R.canSet = nil; queue({ kind = "canmake" }) end
+      end
+      rebuildList()
+    end)
+    text(LX2 - 19, 5, R.state == "ready" and fit(commas(#R.outs) .. " recipes", 20) or "loading...", GRAY, PANEL)
+    return
+  end
   button("organize", LX2 - 33, 5, LX2 - 21, 5, busy and "WORKING" or "ORGANIZE", BLACK, busy and YELLOW or LIME, function()
     if not busy then
       busy = "Organizing..."
@@ -383,25 +608,53 @@ local function drawList()
   if UI.page > pages then UI.page = pages end
   local first = (UI.page - 1) * UI.perPage
   if #items == 0 then
-    text(LX1 + 2, top + 1, stats.scanned == 0 and "Scanning chests..." or "Nothing found", GRAY)
+    local msg = stats.scanned == 0 and "Scanning chests..." or "Nothing found"
+    if UI.mode == "recipes" then
+      msg = R.state ~= "ready" and R.msg or (UI.canMake and not R.canSet and "Checking what you can craft...") or
+            (UI.canMake and "Nothing craftable matches" or "No recipe matches")
+    end
+    text(LX1 + 2, top + 1, msg, R.state == "failed" and UI.mode == "recipes" and RED or GRAY)
   end
   for i = 1, UI.perPage do
     local it = items[first + i]
     if not it then break end
-    local col = (i <= rows) and 0 or 1
-    local y = top + (i - 1) % rows
-    local x = LX1 + col * (colW + 1)
-    local sel = UI.selected == it.id
-    local limit = data.alerts[it.id]
-    local low = limit and it.count < limit
-    local bg = sel and HILITE or ((i % 2 == 0) and BLACK or PANEL)
-    fill(x, y, x + colW - 1, y, bg)
-    local cnt = commas(it.count)
-    text(x + 1, y, fit(it.name, colW - #cnt - 4), sel and YELLOW or WHITE, bg)
-    text(x + colW - #cnt - 1, y, cnt, low and RED or CYAN, bg)
-    if low then text(x + colW - #cnt - 3, y, "!", RED, bg) end
-    local id = it.id
-    hit("item:" .. id, x, y, x + colW - 1, y, function() UI.selected = (UI.selected == id) and nil or id end)
+    if it.ri then                                    -- recipe-mode row
+      local col = (i <= rows) and 0 or 1
+      local y = top + (i - 1) % rows
+      local x = LX1 + col * (colW + 1)
+      local o = it.ri
+      local sel = UI.rsel == o
+      local ready = R.ready[o]
+      if ready == nil then
+        ready = false
+        for _, rc in ipairs(R.byOut[o]) do if canCraft(rc, 1) then ready = true; break end end
+        R.ready[o] = ready
+      end
+      local bg = sel and HILITE or ((i % 2 == 0) and BLACK or PANEL)
+      fill(x, y, x + colW - 1, y, bg)
+      local nr = #R.byOut[o]
+      local tag = ready and "READY" or (nr > 1 and (nr .. " ways") or "")
+      text(x + 1, y, fit(it.name, colW - #tag - 4), sel and YELLOW or (ready and WHITE or LGRAY), bg)
+      text(x + colW - #tag - 1, y, tag, ready and LIME or GRAY, bg)
+      hit("rec:" .. o, x, y, x + colW - 1, y, function()
+        if UI.rsel == o then UI.rsel = nil else UI.rsel = o; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(o) end
+      end)
+    else
+      local col = (i <= rows) and 0 or 1
+      local y = top + (i - 1) % rows
+      local x = LX1 + col * (colW + 1)
+      local sel = UI.selected == it.id
+      local limit = data.alerts[it.id]
+      local low = limit and it.count < limit
+      local bg = sel and HILITE or ((i % 2 == 0) and BLACK or PANEL)
+      fill(x, y, x + colW - 1, y, bg)
+      local cnt = commas(it.count)
+      text(x + 1, y, fit(it.name, colW - #cnt - 4), sel and YELLOW or WHITE, bg)
+      text(x + colW - #cnt - 1, y, cnt, low and RED or CYAN, bg)
+      if low then text(x + colW - #cnt - 3, y, "!", RED, bg) end
+      local id = it.id
+      hit("item:" .. id, x, y, x + colW - 1, y, function() UI.selected = (UI.selected == id) and nil or id end)
+    end
   end
   -- paging
   local py = H - 2
@@ -510,7 +763,92 @@ local function drawDetail()
       save()
     end)
   end
+  local ri = R.byId[id]
+  if R.state == "ready" and ri and R.byOut[ri] then
+    button("showrec", RX1, 31, RX2, 33, "SHOW RECIPE", BLACK, PURPLE, function()
+      UI.mode = "recipes"; UI.selected = nil; UI.rsel = ri; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(ri)
+      rebuildList()
+    end)
+  end
   button("close", RX1, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.selected = nil end)
+end
+
+-- recipe view: 3x3 grid, what you have / are missing, how many to craft, send to pickup
+local function drawRecipe()
+  local o = UI.rsel
+  local list = UI.rlist or rankRecipes(o)
+  if UI.rvar > #list then UI.rvar = 1 end
+  local rc = list[UI.rvar]
+  fill(RX1 - 1, 5, RX2, H, PANEL)
+  text(RX1, 6, fit(R.name[o], 38), YELLOW, PANEL)
+  text(RX1, 7, "makes " .. rc.n .. (rc.k == "l" and "  (shapeless)" or ""), LGRAY, PANEL)
+  if #list > 1 then
+    local lbl = UI.rvar .. "/" .. #list
+    text(RX2 - 9 - #lbl, 7, lbl, LGRAY, PANEL)
+    button("rprev", RX2 - 7, 7, RX2 - 5, 7, string.char(17), YELLOW, GRAY, function() UI.rvar = (UI.rvar - 2) % #list + 1; UI.crafts = 1 end)
+    button("rnext", RX2 - 2, 7, RX2, 7, string.char(16), YELLOW, GRAY, function() UI.rvar = UI.rvar % #list + 1; UI.crafts = 1 end)
+  end
+  local plan = craftPlan(rc, UI.crafts)
+  local one = craftPlan(rc, 1)
+  -- grid (shapeless recipes are laid out in order)
+  local slots = recipeSlots(rc)
+  for cell = 1, 9 do
+    local g = slots[cell] or 0
+    local cx = RX1 + ((cell - 1) % 3) * 13
+    local cy = 9 + math.floor((cell - 1) / 3) * 3
+    if g == 0 then
+      fill(cx, cy, cx + 11, cy + 1, BLACK)
+    else
+      local okSlot = not one.missing[g]
+      local bg = okSlot and GRAY or RED
+      fill(cx, cy, cx + 11, cy + 1, bg)
+      local label = one.pick[g] and itemName(one.pick[g]) or groupLabel(g)
+      label = label:gsub("^#c:", "#"):gsub("^#minecraft:", "#")
+      local l1, l2 = label, ""
+      if #label > 12 then                          -- wrap on a space when possible
+        local cut = 12
+        for k = 12, 4, -1 do if label:sub(k, k) == " " then cut = k; break end end
+        l1, l2 = label:sub(1, cut):gsub("%s+$", ""), label:sub(cut + 1):gsub("^%s+", "")
+      end
+      text(cx, cy, l1, WHITE, bg)
+      if l2 ~= "" then text(cx, cy + 1, fit(l2, 12), WHITE, bg) end
+    end
+  end
+  -- ingredient totals
+  local y = 18
+  text(RX1, y, "NEED FOR " .. UI.crafts .. " CRAFT" .. (UI.crafts == 1 and "" or "S") .. " (" .. commas(rc.n * UI.crafts) .. " made)", YELLOW, PANEL)
+  y = y + 1
+  for _, g in ipairs(plan.order) do
+    if y > 27 then break end
+    local need = plan.need[g]
+    local short = plan.missing[g] or 0
+    local nm = plan.pick[g] and itemName(plan.pick[g]) or groupLabel(g)
+    local right = commas(need - short) .. "/" .. commas(need)
+    text(RX1, y, fit(nm, 38 - #right - 1), short > 0 and WHITE or LGRAY, PANEL)
+    text(RX2 - #right + 1, y, right, short > 0 and RED or LIME, PANEL)
+    y = y + 1
+  end
+  -- how many
+  local mx = maxCrafts(rc)
+  text(RX1, 29, "CRAFTS: " .. UI.crafts, WHITE, PANEL)
+  text(RX1 + 14, 29, "(can make " .. commas(mx) .. ")", mx > 0 and LIME or RED, PANEL)
+  local steps = { { "-1", -1 }, { "+1", 1 }, { "+8", 8 }, { "MAX", 0 } }
+  for i, st in ipairs(steps) do
+    local x = RX1 + (i - 1) * 10
+    button("cr" .. st[1], x, 30, x + 8, 32, st[1], WHITE, GRAY, function()
+      if st[2] == 0 then UI.crafts = math.max(1, mx) else UI.crafts = math.max(1, math.min(4096, UI.crafts + st[2])) end
+    end)
+  end
+  local short = plan.short
+  if short == 0 and not fitsPickup(plan) then text(RX1, 33, "too much for the pickup - lower CRAFTS", ORANGE, PANEL) end
+  local label = short == 0 and "SEND INGREDIENTS" or (#plan.take > 0 and "SEND WHAT I HAVE" or "MISSING ITEMS")
+  local col = short == 0 and LIME or (#plan.take > 0 and YELLOW or GRAY)
+  button("craftsend", RX1, H - 3, RX2 - 12, H - 1, label, BLACK, col, function()
+    if #plan.take == 0 then setStatus("You don't have any of the ingredients", RED); return end
+    queue({ kind = "craft", list = plan.take, missing = short, crafts = UI.crafts, name = itemName(o) })
+    setStatus("Sending ingredients for " .. UI.crafts .. "x " .. itemName(o) .. "...", LIME)
+  end)
+  button("rclose", RX2 - 10, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.rsel = nil end)
 end
 
 local function draw()
@@ -520,7 +858,8 @@ local function draw()
   drawSearchBar()
   drawList()
   for y = 5, H do setCell(RX1 - 2, y, "\149", YELLOW, BLACK) end
-  if UI.selected then drawDetail()
+  if UI.mode == "recipes" and UI.rsel then drawRecipe()
+  elseif UI.mode == "items" and UI.selected then drawDetail()
   else
     local y = drawKeyboard(6)
     drawAlerts(y + 1)
@@ -539,6 +878,39 @@ local function worker()
         local moves, freed = organize()
         setStatus("Organized! " .. commas(moves) .. " moves, freed " .. commas(math.max(0, freed)) .. " slots", LIME)
         if speaker then pcall(speaker.playNote, "chime", 1, 12) end
+      elseif t.kind == "craft" then
+        local sent, short, why = 0, 0, nil
+        for _, x in ipairs(t.list) do
+          local n, w = retrieve(R.id[x.it], x.n)
+          sent = sent + n
+          if n < x.n then short = short + (x.n - n); why = why or w or "pickup full" end
+        end
+        if sent > 0 and short == 0 and t.missing == 0 then
+          setStatus("Sent ingredients for " .. t.crafts .. "x " .. t.name, LIME)
+          if speaker then pcall(speaker.playNote, "pling", 0.8, 12) end
+        elseif sent > 0 and short > 0 then
+          setStatus("Sent " .. commas(sent) .. " items, " .. commas(short) .. " didn't fit (" .. why .. ")", YELLOW)
+        elseif sent > 0 then
+          setStatus("Sent what you have - still missing " .. commas(t.missing) .. " for " .. t.name, YELLOW)
+        else
+          setStatus("Couldn't send ingredients for " .. t.name, RED)
+        end
+        scan()
+      elseif t.kind == "loadrecipes" then
+        loadRecipes(); rebuildList()
+      elseif t.kind == "canmake" then
+        busy = "Checking what you can craft..."
+        local set, n = {}, 0
+        for j, o in ipairs(R.outs) do
+          if j % 300 == 0 then os.queueEvent("recipe_yield"); os.pullEvent("recipe_yield") end
+          for _, rc in ipairs(R.byOut[o]) do
+            if canCraft(rc, 1) then set[o] = true; n = n + 1; break end
+          end
+        end
+        R.canSet, R.canSig = set, stats.total .. ":" .. stats.types
+        busy = nil
+        rebuildList()
+        setStatus("You can craft " .. commas(n) .. " things right now", LIME)
       elseif t.kind == "retrieve" then
         local n, why = retrieve(t.id, t.n)
         local name = data.names[t.id] or prettyId(t.id)
@@ -563,6 +935,9 @@ local function worker()
     elseif now() - lastScan >= CFG.scanEvery then
       lastScan = now()
       scan()
+      if UI.mode == "recipes" and UI.canMake and R.state == "ready" and R.canSig ~= stats.total .. ":" .. stats.types then
+        queue({ kind = "canmake" })
+      end
       if stats.scanned and status.msg == "Scanning storage..." then
         setStatus("Found " .. (stats.chests or 0) .. " storage chests", LIME)
       end
@@ -611,10 +986,13 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end }
+    busy = function() return busy end, R = R, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
-parallel.waitForAny(ui, worker)
+parallel.waitForAny(ui, worker, function()
+  loadRecipes(); rebuildList()
+  while true do os.pullEvent("never") end
+end)
 for _, m in ipairs(mons) do
   for i = 0, 15 do m.p.setPaletteColour(2 ^ i, term.nativePaletteColour(2 ^ i)) end
   m.p.setBackgroundColour(colors.black); m.p.clear()

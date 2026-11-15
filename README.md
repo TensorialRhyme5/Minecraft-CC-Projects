@@ -29,6 +29,13 @@ set low-stock alerts, and dump items into the input chest to have them filed awa
 Input chest `minecraft:chest_0`, pickup barrel `minecraft:barrel_0` (change at the top of `storage/storage.lua`).
 You can swap the pickup barrel for a placed Sophisticated Backpack: retrieved items go into the backpack, then put any barrel back.
 
+**Recipes:** tap `RECIPES` to search every crafting-table recipe in All the Mons (23,600 recipes from the mod jars plus the
+pack's KubeJS changes). Pick one to see the 3x3 grid, what you have and what's missing, choose how many crafts, and
+`SEND INGREDIENTS` puts them in the pickup. Tag slots (any planks, any iron ingot...) use whatever you have the most of.
+`CAN MAKE` filters to things you can craft right now. From an item's detail page, `SHOW RECIPE` jumps straight there.
+The recipe book (`storage/recipes.txt`) is downloaded into memory at startup, so it doesn't use the computer's disk.
+To rebuild it after a modpack update, see `storage/tools/`.
+
 ```
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/startup.lua startup.lua
 reboot
