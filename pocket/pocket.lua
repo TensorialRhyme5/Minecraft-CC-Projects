@@ -132,7 +132,8 @@ local function nextCtr()
   return c
 end
 local function canon(msg)
-  return table.concat({ tostring(msg.type), tostring(msg.q or ""), tostring(msg.id or ""), tostring(msg.n or ""), tostring(msg.to or "") }, "|")
+  return table.concat({ tostring(msg.type), tostring(msg.q or ""), tostring(msg.id or ""), tostring(msg.n or ""), tostring(msg.to or ""),
+    tostring(msg.off or ""), tostring(msg.lim or "") }, "|")
 end
 local function storageSend(msg)
   if not S.id or not PAIRED then return end
@@ -157,7 +158,11 @@ local function findStorage()
   if type(id) == "table" then id = id[1] end
   S.id = id
 end
-local function search() UI.searchAt = 0; S.lastQ = UI.q; storageSend({ type = "search", q = UI.q }) end
+local ROWS = 13                         -- result rows on screen (set properly below)
+local function search()
+  UI.searchAt = 0; S.lastQ = UI.q
+  storageSend({ type = "search", q = UI.q, off = (UI.page - 1) * ROWS, lim = ROWS })
+end
 local function musicSend(msg)
   if M.id then rednet.send(M.id, msg, MUSIC_PROTO) else rednet.broadcast(msg, MUSIC_PROTO) end
 end
@@ -171,6 +176,7 @@ end
 
 -- ---------------------------------------------------------- ITEMS tab
 local ROWS_TOP, ROWS_BOT = 3, H - 5
+ROWS = ROWS_BOT - ROWS_TOP + 1
 local function drawPairing()
   center(3, "PAIR WITH STORAGE", C.accent)
   text(2, 5, "On the storage screen:", C.dim)
@@ -218,12 +224,12 @@ local function drawItems()
     end
     button("back", 2, ROWS_BOT, W - 1, ROWS_BOT, "\17 BACK", C.bg, C.accent, function() UI.sel = nil end)
   else
-    local rows = ROWS_BOT - ROWS_TOP + 1
-    local pages = math.max(1, math.ceil(#S.results / rows))
-    UI.page = math.max(1, math.min(UI.page, pages))
+    local rows = ROWS
+    local pages = math.max(1, math.ceil(S.found / rows))
+    if UI.page > pages and S.lastQ == UI.q and S.got then UI.page = pages; search() end
     if #S.results == 0 then center(6, S.lastQ and "Nothing found" or "Searching...", C.dim) end
     for r = 1, rows do
-      local it = S.results[(UI.page - 1) * rows + r]
+      local it = S.results[r]
       if not it then break end
       local y = ROWS_TOP + r - 1
       local bg = (r % 2 == 0) and C.bg or C.blue
@@ -235,10 +241,10 @@ local function drawItems()
     end
     -- pager
     local y = ROWS_BOT + 1
-    local pg = UI.page .. "/" .. pages .. (S.found > #S.results and ("  (" .. S.found .. ")") or "")
+    local pg = UI.page .. "/" .. pages .. "  (" .. S.found .. ")"
     center(y, pg, C.dim)
-    if UI.page > 1 then button("prev", 1, y, 3, y, "\17", C.accent, C.bg, function() UI.page = UI.page - 1 end) end
-    if UI.page < pages then button("next", W - 2, y, W, y, "\16", C.accent, C.bg, function() UI.page = UI.page + 1 end) end
+    if UI.page > 1 then button("prev", 1, y, 4, y, "\17", C.accent, C.panel, function() UI.page = UI.page - 1; search() end) end
+    if UI.page < pages then button("next", W - 3, y, W, y, "\16", C.accent, C.panel, function() UI.page = UI.page + 1; search() end) end
   end
   -- bottom: put away inventory
   if S.id and not UI.sel then
@@ -356,7 +362,7 @@ local function main()
       if UI.searchAt > 0 and t >= UI.searchAt then search() end
       if S.id and UI.tab == "items" and t - lastInfo > ((S.info and S.info.busy) and 1 or 5) then
         lastInfo = t
-        if UI.sel then storageSend({ type = "info" }) else storageSend({ type = "search", q = UI.q }) end
+        if UI.sel then storageSend({ type = "info" }) else search() end
       end
       if UI.tab == "music" and not musicOnline() and t - (M.helloAt or 0) > 3 then M.helloAt = t; musicSend({ cmd = "hello" }) end
       draw(t)
@@ -368,7 +374,7 @@ local function main()
       end
       draw(t)
     elseif ev == "mouse_scroll" and UI.tab == "items" and not UI.sel then
-      UI.page = math.max(1, UI.page + a); draw(t)
+      UI.page = math.max(1, UI.page + a); search(); draw(t)
     elseif ev == "char" and UI.tab == "items" and not PAIRED then
       if a:match("[%w]") and #UI.code < 8 then UI.code = UI.code .. a:upper() end
       draw(t)
@@ -398,7 +404,7 @@ local function main()
       elseif c == STORE_PROTO and type(msg) == "table" then
         S.id = a
         if msg.type == "results" then
-          if msg.q == UI.q then S.results, S.found = msg.items or {}, msg.found or 0 end
+          if msg.q == UI.q and (msg.off or 0) == (UI.page - 1) * ROWS then S.results, S.found, S.got = msg.items or {}, msg.found or 0, true end
           if UI.sel then for _, it in ipairs(msg.items or {}) do if it.id == UI.sel.id then UI.sel.count = it.count end end end
         end
         if msg.type == "results" or msg.type == "info" then S.info, S.infoAt = msg, t end

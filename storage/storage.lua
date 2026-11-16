@@ -1720,7 +1720,7 @@ end
 
 -- ---------------------------------------------------------- pocket remote server
 local NET_PROTO = "storagenet"
-local function searchFor(q, limit)
+local function searchFor(q, offset, limit)
   q = (q or ""):lower()
   local out = {}
   for id, e in pairs(index) do
@@ -1746,8 +1746,9 @@ local function searchFor(q, limit)
     return a.name < b.name
   end)
   local total = #out
-  while #out > (limit or 60) do table.remove(out) end
-  return out, total
+  local page = {}
+  for i = (offset or 0) + 1, math.min(total, (offset or 0) + (limit or 60)) do page[#page + 1] = out[i] end
+  return page, total
 end
 local function netInfo(player)
   local who = owners()
@@ -1756,7 +1757,8 @@ local function netInfo(player)
 end
 -- every request must be signed with the key made at pairing (the code itself is never sent)
 local function canon(msg)
-  return table.concat({ tostring(msg.type), tostring(msg.q or ""), tostring(msg.id or ""), tostring(msg.n or ""), tostring(msg.to or "") }, "|")
+  return table.concat({ tostring(msg.type), tostring(msg.q or ""), tostring(msg.id or ""), tostring(msg.n or ""), tostring(msg.to or ""),
+    tostring(msg.off or ""), tostring(msg.lim or "") }, "|")
 end
 local function verify(msg)
   local dev = tonumber(msg.dev)
@@ -1791,9 +1793,11 @@ local function netServer()
         if not r then
           rednet.send(from, { type = "denied", why = why, dev = msg.dev }, NET_PROTO)
         elseif msg.type == "search" then
-          local res, total = searchFor(msg.q, 60)
+          local off = math.max(0, math.floor(tonumber(msg.off) or 0))
+          local lim = math.max(1, math.min(60, math.floor(tonumber(msg.lim) or 60)))
+          local res, total = searchFor(msg.q, off, lim)
           local info = netInfo(r.player)
-          info.type, info.q, info.items, info.found = "results", msg.q, res, total
+          info.type, info.q, info.items, info.found, info.off = "results", msg.q, res, total, off
           rednet.send(from, info, NET_PROTO)
         elseif msg.type == "send" and type(msg.id) == "string" then
           local n = tonumber(msg.n) or 1
