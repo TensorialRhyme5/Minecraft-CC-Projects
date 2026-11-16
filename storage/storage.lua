@@ -566,7 +566,7 @@ do
     for _, f in ipairs(SM.furnaces) do
       local ok, l = pcall(peripheral.call, f.name, "list")
       if ok and type(l) == "table" then
-        if l[3] then storeFrom(f.name, 3, l[3].name, l[3].count) end      -- finished items back to storage
+        if l[3] and storeFrom(f.name, 3, l[3].name, l[3].count) > 0 then SM.progressAt = now() end   -- finished items back to storage
         local inp = l[1]
         f.cur, f.n = inp and inp.name or nil, inp and inp.count or 0
         local job
@@ -578,7 +578,11 @@ do
         end
         if job then
           local room = 64 - (inp and inp.count or 0)
-          local n = room > 0 and pullInto(f.name, 1, job.id, math.min(room, job.left)) or 0
+          local cap = 0
+          for _, f2 in ipairs(SM.furnaces) do if fits(f2, job) then cap = cap + 1 end end
+          local share = math.max(1, math.ceil(job.total / math.max(1, cap)))   -- split the batch over the furnaces
+          local want = math.min(room, job.left, math.max(0, share - (inp and inp.count or 0)))
+          local n = want > 0 and pullInto(f.name, 1, job.id, want) or 0
           job.left = job.left - n
           if n > 0 then f.cur = job.id; f.n = (f.n or 0) + n
           elseif not inp and (not byName[job.id] or byName[job.id].count <= 0) then job.left, job.short = 0, true end
@@ -665,13 +669,15 @@ do
     local can = 0
     for _, f in ipairs(SM.furnaces) do if fits(f, { b = st.rc.b, f = st.rc.f }) then can = can + 1 end end
     if can == 0 then return 0, (st.rc.b and not st.rc.f) and "needs a blast furnace" or "needs a regular furnace" end
-    local limit = now() + 30 + 11 * math.ceil(total / can)                -- a furnace does one item every 10s
+    SM.progressAt = now()
     while true do
       local done, left = true, 0
       for _, j in ipairs(mine) do if not j.done then done = false end; left = left + math.max(0, j.left) end
       if done then break end
       if show then show("Smelting " .. commas(total) .. " for " .. nameOf(R.id[st.rc.out]) .. "  ~" .. fmtTime(SM.etaLeft()) .. " left") end
-      if now() > limit then return 0, "smelting took too long (fuel?)" end
+      if now() - (SM.progressAt or now()) > 90 then                          -- nothing came out for 90 s
+        return 0, SM.noFuel and "furnaces ran out of fuel (put coal or charcoal in storage)" or "furnaces stopped working (full output? no fuel?)"
+      end
       sleep(1)
     end
     sleep(1.5); SM.tick()                                                 -- collect the last ones
