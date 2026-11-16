@@ -1995,10 +1995,30 @@ end
 
 math.randomseed(os.epoch("utc") + os.getComputerID() * 7919)
 findIM()
+-- read-only status for the jukebox CONTROL panel (no items can be moved with this)
+local function statusLoop()
+  local lastCrafterCheck = now()
+  while true do
+    sleep(5)
+    if openNet() then
+      if now() - lastCrafterCheck > 60 then lastCrafterCheck = now(); findCrafter(true) end
+      local low = {}
+      for id, limit in pairs(data.alerts) do
+        local have = index[id] and index[id].count or 0
+        if have < limit then low[#low + 1] = { name = data.names[id] or prettyId(id), have = have, limit = limit } end
+      end
+      table.sort(low, function(x, y) return x.have / x.limit < y.have / y.limit end)
+      while #low > 6 do table.remove(low) end
+      pcall(rednet.broadcast, { type = "status", used = stats.used, slots = stats.slots, total = stats.total,
+        types = stats.types, msg = status.msg, busy = busy, low = low, crafter = CRAFTER.id ~= nil,
+        owners = owners(), at = os.epoch("utc") }, "storagestat")
+    end
+  end
+end
 parallel.waitForAny(ui, worker, netServer, function()
   loadRecipes(); rebuildList()
   findCrafter(true)
-  while true do os.pullEvent("never") end
+  statusLoop()
 end)
 for _, m in ipairs(mons) do
   for i = 0, 15 do m.p.setPaletteColour(2 ^ i, term.nativePaletteColour(2 ^ i)) end

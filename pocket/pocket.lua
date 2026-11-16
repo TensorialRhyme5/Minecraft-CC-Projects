@@ -339,12 +339,111 @@ local function drawMusic(t)
 end
 
 -- ---------------------------------------------------------- main
+-- ---------------------------------------------------------- CONTROL tab (the jukebox sends this)
+local function commasN(n) local s = tostring(math.floor(n or 0)); local r = s:reverse():gsub("(%d%d%d)", "%1,"):reverse(); return (r:gsub("^,", "")) end
+local function wxShort(code, day)
+  if code == 0 then return day and "Sunny" or "Clear", day and C.accent or C.text end
+  if code <= 2 then return "Fair", C.dim end
+  if code == 3 then return "Cloud", C.dim end
+  if code == 45 or code == 48 then return "Fog", C.dim end
+  if code >= 51 and code <= 57 then return "Rain", C.light end
+  if (code >= 61 and code <= 67) or (code >= 80 and code <= 82) then return "Rain", C.light end
+  if (code >= 71 and code <= 77) or code == 85 or code == 86 then return "Snow", C.text end
+  if code >= 95 then return "Storm", C.accent end
+  return "--", C.dim
+end
+local function drawControl()
+  local p = (M.panel and now() - M.panelAt < 20) and M.panel or nil
+  if not p then
+    center(8, "CONTROL PANEL", C.accent)
+    center(10, netOn and "waiting for the jukebox..." or "No modem!", netOn and C.dim or C.bad)
+    return
+  end
+  local y = 3
+  text(1, y, p.clock .. " " .. p.tz, C.text); text(W - #p.date + 1, y, p.date, C.dim); y = y + 1
+  for _, c in ipairs(p.wx or {}) do
+    text(1, y, fit(c.name, 9), C.light)
+    if c.ok then
+      local label, col = wxShort(c.code, c.day)
+      local temp = math.floor(c.temp + 0.5) .. "\176"
+      text(11, y, temp, C.text)
+      local hl = (c.hi and c.lo) and (math.floor(c.hi + 0.5) .. "/" .. math.floor(c.lo + 0.5)) or ""
+      text(12 + #temp, y, fit(label, W - 12 - #temp - #hl - 1), col)
+      text(W - #hl + 1, y, hl, colors.gray)
+    else text(11, y, "loading...", C.dim) end
+    y = y + 1
+  end
+  y = y + 1
+  local g = p.game or {}
+  text(1, y, "MC", C.good); text(4, y, "Day " .. tostring(g.day or "?") .. " " .. tostring(g.time or ""), C.text)
+  if g.hasEnv then
+    local ws, wc = "Clear", C.text
+    if g.thunder then ws, wc = "Storm", C.accent elseif g.rain then ws, wc = "Rain", C.light end
+    text(W - #ws + 1, y, ws, wc)
+  end
+  y = y + 1
+  text(1, y, "TPS", C.good)
+  if p.tps then
+    local tc = p.tps >= 18 and C.good or (p.tps >= 12 and C.accent or C.bad)
+    text(5, y, string.format("%.1f", p.tps) .. (p.tps >= 18 and " smooth" or (p.tps >= 12 and " a bit laggy" or " very laggy")), tc)
+  else text(5, y, "checking...", C.dim) end
+  y = y + 2
+  local list = p.players
+  text(1, y, "ONLINE" .. (list and (" (" .. #list .. ")") or ""), C.light)
+  if list then text(W - 5, y, "\7", C.good); text(W - 3, y, "near", C.dim) end
+  y = y + 1
+  local rows = 4
+  if not p.hasDet then text(1, y, "no Player Detector", C.dim)
+  elseif #list == 0 then text(1, y, "nobody online", C.dim)
+  else
+    for i = 1, math.min(#list, rows) do
+      local e = list[i]
+      if i == rows and #list > rows then text(1, y + i - 1, "+" .. (#list - rows + 1) .. " more", C.dim)
+      else
+        text(1, y + i - 1, "\7", e.near and C.good or C.light)
+        text(3, y + i - 1, fit(e.name, W - 2), C.text)
+      end
+    end
+  end
+  y = y + rows + 1
+  local st = p.storage
+  text(1, y, "STORAGE", C.pink)
+  if st then
+    local pct = (st.slots or 0) > 0 and st.used / st.slots or 0
+    local ps = math.floor(pct * 100 + 0.5) .. "%"
+    local bw = W - 9 - #ps
+    local f = math.floor(pct * bw + 0.5)
+    for i = 1, bw do setCell(8 + i, y, " ", C.text, i <= f and (pct > 0.9 and C.bad or (pct > 0.75 and C.accent or C.good)) or colors.gray) end
+    text(W - #ps + 1, y, ps, C.text); y = y + 1
+    text(1, y, fit(commasN(st.total) .. " items " .. commasN(st.types) .. " kinds", W), C.dim); y = y + 1
+    local low = type(st.low) == "table" and st.low or {}
+    if #low > 0 then
+      local parts = {}
+      for _, a in ipairs(low) do parts[#parts + 1] = a.name .. " " .. a.have .. "/" .. a.limit end
+      text(1, y, "Low:", C.bad); text(6, y, fit(table.concat(parts, ", "), W - 5), C.text)
+    else text(1, y, fit(st.busy or st.msg or "", W), st.busy and C.accent or C.text) end
+  else y = y + 1; text(1, y, "storage offline", C.dim); y = y + 1 end
+  y = H
+  if type(p.dev) == "table" then
+    local x = 1
+    for _, d in ipairs({ { "Storage", p.dev.storage }, { "Crafter", p.dev.crafter }, { "Zone", p.dev.zone } }) do
+      text(x, y, "\7", d[2] and C.good or C.bad); text(x + 2, y, d[1], d[2] and C.text or C.dim)
+      x = x + #d[1] + 3
+    end
+  end
+end
+
 local function draw(t)
   clear(); hits = {}
-  local items = UI.tab == "items"
-  button("tabI", 1, 1, 13, 1, "ITEMS", items and C.bg or C.text, items and C.accent or C.panel, function() UI.tab = "items"; search() end)
-  button("tabM", 14, 1, W, 1, "MUSIC", items and C.text or C.bg, items and C.panel or C.accent, function() UI.tab = "music" end)
-  if items then drawItems() else drawMusic(t) end
+  local tab = UI.tab
+  local function tabBtn(id, x1, x2, label, name, fn)
+    local on = tab == name
+    button(id, x1, 1, x2, 1, label, on and C.bg or C.text, on and C.accent or C.panel, fn)
+  end
+  tabBtn("tabI", 1, 8, "ITEMS", "items", function() UI.tab = "items"; search() end)
+  tabBtn("tabM", 9, 17, "MUSIC", "music", function() UI.tab = "music" end)
+  tabBtn("tabC", 18, W, "CONTROL", "control", function() UI.tab = "control" end)
+  if tab == "items" then drawItems() elseif tab == "music" then drawMusic(t) else drawControl() end
   present()
 end
 
@@ -435,6 +534,8 @@ local function main()
         end
       elseif c == MUSIC_PROTO and type(msg) == "table" and msg.type == "state" then
         M.st, M.at, M.id = msg, t, a
+      elseif c == MUSIC_PROTO and type(msg) == "table" and msg.type == "panel" then
+        M.panel, M.panelAt = msg, t
       end
     end
   end
