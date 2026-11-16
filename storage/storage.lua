@@ -561,6 +561,7 @@ end
 
 -- ---------------------------------------------------------- moving items
 local tasks = {}
+local busy = nil              -- progress text while organizing / crafting
 local function queue(t) tasks[#tasks + 1] = t; os.queueEvent("storage_task") end
 
 local function retrieve(id, want)
@@ -578,9 +579,141 @@ local function retrieve(id, want)
   return moved
 end
 
+-- ---------------------------------------------------------- auto-crafting (crafty turtle)
+-- Layout: [full wired modem] [TURTLE] -> [pickup barrel]. We put the ingredients in the barrel,
+-- line them up at the front of it, and tell the turtle which item goes in which grid slot.
+local PROTO = "storagecraft"
+local CRAFTER = { id = nil, checked = 0 }
+local netOpen = false
+local function openNet()
+  if netOpen then return true end
+  for _, name in ipairs(peripheral.getNames()) do
+    if peripheral.getType(name) == "modem" then pcall(rednet.open, name); netOpen = true end
+  end
+  return netOpen
+end
+local function findCrafter(force)
+  if CRAFTER.id and not force then return CRAFTER.id end
+  if not openNet() then return nil end
+  local id = rednet.lookup(PROTO)
+  if type(id) == "table" then id = id[1] end
+  CRAFTER.id, CRAFTER.checked = id, now()
+  return id
+end
+
+local maxStackCache = {}
+local function maxStack(id)
+  if maxStackCache[id] then return maxStackCache[id] end
+  local e = index[id]
+  local m = 64
+  if e and e.locs[1] then
+    local ok, d = pcall(peripheral.call, e.locs[1].inv, "getItemDetail", e.locs[1].slot)
+    if ok and type(d) == "table" and d.maxCount then m = d.maxCount end
+  end
+  maxStackCache[id] = m
+  return m
+end
+
+-- every grid cell needs k of ONE item (a turtle slot can't mix oak and birch planks)
+local function cellAssign(rc, k)
+  local slots = recipeSlots(rc)
+  local cells = {}
+  for i, g in ipairs(slots) do if g > 0 then cells[#cells + 1] = { i = i, g = g } end end
+  table.sort(cells, function(a, b) return #groupItems(a.g) < #groupItems(b.g) end)
+  local used, assign = {}, {}
+  for _, c in ipairs(cells) do
+    local best, bestFree
+    for _, it in ipairs(groupItems(c.g)) do
+      local free = stock(it) - (used[it] or 0)
+      if free >= k and (not best or free > bestFree) then best, bestFree = it, free end
+    end
+    if not best then return nil end
+    used[best] = (used[best] or 0) + k
+    assign[c.i] = best
+  end
+  for it in pairs(used) do if maxStack(R.id[it]) < k then return nil end end
+  return assign, used
+end
+local function biggestBatch(rc, want)            -- largest batch (<= 64) we can lay out right now
+  local lo, hi = 0, math.min(64, want)
+  while lo < hi do
+    local mid = math.floor((lo + hi + 1) / 2)
+    if cellAssign(rc, mid) then lo = mid else hi = mid - 1 end
+  end
+  if lo == 0 then return 0 end
+  local a, u = cellAssign(rc, lo)
+  return lo, a, u
+end
+
+-- move the job's items to the first slots of the barrel so the turtle grabs them first
+local function arrangePickup(pk, need)
+  local okL, l = pcall(peripheral.call, pk, "list")
+  local okS, size = pcall(peripheral.call, pk, "size")
+  if not (okL and okS and type(l) == "table") then return false end
+  local jobSlots = {}
+  for slot, it in pairs(l) do if need[it.name] then jobSlots[#jobSlots + 1] = slot end end
+  table.sort(jobSlots)
+  local front = 1
+  for _, s in ipairs(jobSlots) do
+    if s ~= front then
+      if l[front] then                                   -- something else is in the way: park it at the back
+        local empty
+        for e = size, front + 1, -1 do if not l[e] then empty = e; break end end
+        if not empty then return false end
+        pcall(peripheral.call, pk, "pushItems", pk, front, nil, empty)
+        l[empty], l[front] = l[front], nil
+      end
+      pcall(peripheral.call, pk, "pushItems", pk, s, nil, front)
+      l[front], l[s] = l[s], nil
+    end
+    front = front + 1
+  end
+  return true
+end
+
+local jobCounter = 0
+local function autoCraft(t)
+  local id = findCrafter(true)
+  if not id then return 0, "no crafter turtle found on the network" end
+  local remaining, made = t.crafts, 0
+  while remaining > 0 do
+    scan()
+    local pk = currentPickup()
+    if not pk then return made, "no barrel or backpack connected" end
+    local k, assign, used = biggestBatch(t.rc, remaining)
+    if k == 0 then return made, made > 0 and "ran out of ingredients" or "missing ingredients" end
+    busy = "Crafting " .. t.name .. "  " .. (t.crafts - remaining) .. "/" .. t.crafts
+    local need = {}
+    for it, n in pairs(used) do
+      local got = retrieve(R.id[it], n)
+      need[R.id[it]] = n
+      if got < n then return made, "pickup is full" end
+    end
+    if not arrangePickup(pk, need) then return made, "pickup is too full to sort" end
+    jobCounter = jobCounter + 1
+    local cells = {}
+    for cell, it in pairs(assign) do
+      local r, c = math.floor((cell - 1) / 3), (cell - 1) % 3
+      cells[r * 4 + c + 1] = R.id[it]
+    end
+    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = R.id[t.out] }
+    rednet.send(id, job, PROTO)
+    local deadline = os.clock() + 20 + k * 0.3
+    local reply
+    repeat
+      local from, msg = rednet.receive(PROTO, math.max(0.1, deadline - os.clock()))
+      if from == id and type(msg) == "table" and msg.type == "done" and msg.job == jobCounter then reply = msg end
+    until reply or os.clock() >= deadline
+    if not reply then return made, "the crafter turtle didn't answer" end
+    if not reply.ok then return made, reply.err or "craft failed" end
+    made = made + (reply.made or 0)
+    remaining = remaining - k
+  end
+  return made
+end
+
 -- ORGANIZE: gather each item into one "home" chest (the one already holding the most of it),
 -- then merge its partial stacks there so they take as few slots as possible.
-local busy = nil              -- progress text while organizing
 local function organize()
   scan()
   local ids = {}
@@ -1049,14 +1182,21 @@ local function drawRecipe()
   end
   local short = plan.short
   if short == 0 and not fitsPickup(plan) then text(RX1, 33, "too much for the pickup - lower CRAFTS", ORANGE, PANEL) end
-  local label = short == 0 and "SEND INGREDIENTS" or (#plan.take > 0 and "SEND WHAT I HAVE" or "MISSING ITEMS")
+  local label = short == 0 and "SEND ITEMS" or (#plan.take > 0 and "SEND SOME" or "MISSING")
   local col = short == 0 and LIME or (#plan.take > 0 and YELLOW or GRAY)
-  button("craftsend", RX1, H - 3, RX2 - 12, H - 1, label, BLACK, col, function()
+  local canAuto = short == 0 and not busy
+  button("autocraft", RX1, H - 3, RX1 + 11, H - 1, "CRAFT", BLACK, canAuto and CYAN or GRAY, function()
+    if busy then return end
+    if short > 0 then setStatus("Missing ingredients - tap the red slots to see how to make them", RED); return end
+    queue({ kind = "autocraft", rc = rc, out = o, crafts = UI.crafts, name = itemName(o) })
+    setStatus("Crafting " .. UI.crafts .. "x " .. itemName(o) .. "...", CYAN)
+  end)
+  button("craftsend", RX1 + 13, H - 3, RX2 - 13, H - 1, label, BLACK, col, function()
     if #plan.take == 0 then setStatus("You don't have any of the ingredients", RED); return end
     queue({ kind = "craft", list = plan.take, missing = short, crafts = UI.crafts, name = itemName(o) })
     setStatus("Sending ingredients for " .. UI.crafts .. "x " .. itemName(o) .. "...", LIME)
   end)
-  button("rclose", RX2 - 10, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.rsel = nil end)
+  button("rclose", RX2 - 11, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.rsel = nil end)
 end
 
 local function draw()
@@ -1086,6 +1226,16 @@ local function worker()
         local moves, freed = organize()
         setStatus("Organized! " .. commas(moves) .. " moves, freed " .. commas(math.max(0, freed)) .. " slots", LIME)
         if speaker then pcall(speaker.playNote, "chime", 1, 12) end
+      elseif t.kind == "autocraft" then
+        local made, err = autoCraft(t)
+        busy = nil
+        if err then
+          setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err, made > 0 and YELLOW or RED)
+        else
+          setStatus("Crafted " .. commas(made) .. " " .. t.name .. " - it's in the pickup", LIME)
+          if speaker then pcall(speaker.playNote, "chime", 1, 16) end
+        end
+        scan()
       elseif t.kind == "craft" then
         local sent, short, why = 0, 0, nil
         for _, x in ipairs(t.list) do
@@ -1104,6 +1254,9 @@ local function worker()
           setStatus("Couldn't send ingredients for " .. t.name, RED)
         end
         scan()
+      elseif t.kind == "findcrafter" then
+        local id = findCrafter(true)
+        setStatus(id and ("Found the crafter turtle (#" .. id .. ")") or "No crafter turtle on the network", id and LIME or RED)
       elseif t.kind == "loadrecipes" then
         loadRecipes(); rebuildList()
       elseif t.kind == "canmake" then
@@ -1200,6 +1353,7 @@ end
 
 parallel.waitForAny(ui, worker, function()
   loadRecipes(); rebuildList()
+  findCrafter(true)
   while true do os.pullEvent("never") end
 end)
 for _, m in ipairs(mons) do

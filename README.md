@@ -36,6 +36,17 @@ pack's KubeJS changes). Pick one to see the 3x3 grid, what you have and what's m
 The recipe book (`storage/recipes.txt`) is downloaded into memory at startup, so it doesn't use the computer's disk.
 To rebuild it after a modpack update, see `storage/tools/`.
 
+**Auto-crafting (crafty turtle):** put a crafty turtle facing the pickup barrel with a full-block wired modem
+touching its back (cabled to the network, right-clicked on). On the turtle:
+
+```
+wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/crafter_startup.lua startup.lua
+reboot
+```
+
+Then `CRAFT` on a recipe sends the ingredients to the barrel, the turtle lays out the grid and crafts, and the finished
+items land in the barrel (up to 64 crafts per turtle run, big orders run several times).
+
 ```
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/startup.lua startup.lua
 reboot
