@@ -27,11 +27,12 @@ local PAL = {
   [colors.black] = 0x070912, [colors.brown] = 0x151a2e, [colors.blue] = 0x2a3270,
   [colors.gray] = 0x4c5272, [colors.lightGray] = 0xa0a6c4, [colors.white] = 0xf2f4ff,
   [colors.cyan] = 0x38c6ff, [colors.lime] = 0x6fd65a, [colors.yellow] = 0xffd23f,
-  [colors.orange] = 0xff9a3a, [colors.red] = 0xff4a4a, [colors.purple] = 0x9b5cff,
+  [colors.orange] = 0xff9a3a, [colors.red] = 0xff4a4a, [colors.purple] = 0x9b5cff, [colors.green] = 0x2f9e4f,
 }
 for _, m in ipairs(mons) do for c, v in pairs(PAL) do m.p.setPaletteColour(c, v) end end
 local WHITE, ORANGE, YELLOW, LIME, GRAY, LGRAY = "0", "1", "4", "5", "7", "8"
 local CYAN, PURPLE, HILITE, PANEL, RED, BLACK = "9", "a", "b", "c", "e", "f"
+local GREEN = "d"
 
 -- ---------------------------------------------------------- framebuffer
 local W, H = math.huge, math.huge
@@ -243,10 +244,15 @@ local function groupItems(g)
   end
   return m
 end
-local function groupLabel(g)                      -- "#c:ingots/iron" or the item's name
+local function groupLabel(g)                      -- a real item name for a slot (vanilla first), else the tag
+  local items = groupItems(g)
+  local pick
+  for _, it in ipairs(items) do if (R.id[it] or ""):find("^minecraft:") then pick = it; break end end
+  pick = pick or items[1]
+  if pick then return (R.name[pick]:gsub(" %(.*%)$", "")) end
   local tok = (R.grpRaw[g] or ""):match("^[^,]+") or ""
   if tok:sub(1, 1) == "t" then return "#" .. (R.tagName[tonumber(tok:sub(2))] or "?") end
-  return R.name[tonumber(tok)] or "?"
+  return "?"
 end
 local function itemName(i)                        -- recipe item index -> display name
   local id = R.id[i]
@@ -682,7 +688,7 @@ local function autoCraft(t)
     if not pk then return made, "no barrel or backpack connected" end
     local k, assign, used = biggestBatch(t.rc, remaining)
     if k == 0 then return made, made > 0 and "ran out of ingredients" or "missing ingredients" end
-    busy = "Crafting " .. t.name .. "  " .. (t.crafts - remaining) .. "/" .. t.crafts
+    busy = (t.step or "") .. "Crafting " .. t.name .. "  " .. (t.crafts - remaining) .. "/" .. t.crafts
     local need = {}
     for it, n in pairs(used) do
       local got = retrieve(R.id[it], n)
@@ -698,7 +704,7 @@ local function autoCraft(t)
     end
     local nslots = 0
     for _ in pairs(cells) do nslots = nslots + 1 end
-    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = R.id[t.out], slots = nslots }
+    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = R.id[t.out], slots = nslots, n = t.rc.n }
     rednet.send(id, job, PROTO)
     local deadline = os.clock() + 20 + k * 0.3
     local reply
@@ -712,6 +718,176 @@ local function autoCraft(t)
     remaining = remaining - k
   end
   return made
+end
+
+-- ---------------------------------------------------------- crafting missing parts first
+-- Plans a whole chain (logs -> planks -> sticks -> pickaxe) against a "virtual" copy of the
+-- storage counts, so a slot only turns green when everything under it can really be made.
+local CHAIN_DEPTH, CHAIN_BUDGET = 6, 400
+local BASE = setmetatable({}, { __index = function(_, it) return stock(it) end })
+local function child(vs) return setmetatable({}, { __index = vs }) end
+local function commit(from, to) for k, v in pairs(from) do to[k] = v end end
+
+-- how short a recipe is of being craftable straight from storage (0 = ready now)
+local shortMemo = {}
+local function directShort(rc)
+  local m = shortMemo[rc]
+  if not m or m.scan ~= stats.scanned then m = { scan = stats.scanned, v = craftPlan(rc, 1).short }; shortMemo[rc] = m end
+  return m.v
+end
+-- recipes for an item, the ones closest to craftable first
+local function orderedRecipes(it)
+  local l = {}
+  for _, rc in ipairs(R.byOut[it]) do l[#l + 1] = rc end
+  table.sort(l, function(a, b) return directShort(a) < directShort(b) end)
+  return l
+end
+local function craftCandidates(g, chain)
+  local list, score = {}, {}
+  for _, it in ipairs(groupItems(g)) do
+    if R.byOut[it] and not chain[it] then
+      list[#list + 1] = it
+      local best = math.huge
+      for _, rc in ipairs(R.byOut[it]) do best = math.min(best, directShort(rc)) end
+      score[it] = best
+    end
+  end
+  table.sort(list, function(a, b)
+    if score[a] ~= score[b] then return score[a] < score[b] end
+    local am, bm = (R.id[a] or ""):find("^minecraft:") ~= nil, (R.id[b] or ""):find("^minecraft:") ~= nil
+    if am ~= bm then return am end
+    return a < b
+  end)
+  while #list > 6 do table.remove(list) end
+  return list
+end
+
+local planRecipe
+-- make `amount` of something that fits group g (on top of what's in vs); returns steps or nil
+local function planMake(g, amount, vs, depth, chain, budget)
+  if depth >= (budget.max or CHAIN_DEPTH) then return nil end
+  for _, it in ipairs(craftCandidates(g, chain)) do
+    local recs = orderedRecipes(it)
+    for r = 1, math.min(3, #recs) do
+      local rc2 = recs[r]
+      budget.n = budget.n - 1
+      if budget.n < 0 then return nil end
+      local sub = math.ceil(amount / rc2.n)
+      local c = child(vs)
+      chain[it] = true
+      local steps = planRecipe(rc2, sub, c, depth + 1, chain, budget)
+      chain[it] = nil
+      if steps then
+        commit(c, vs)
+        vs[it] = vs[it] + sub * rc2.n - amount           -- the extra goes back into storage
+        steps[#steps + 1] = { rc = rc2, out = it, crafts = sub }
+        return steps
+      end
+    end
+  end
+  return nil
+end
+
+planRecipe = function(rc, crafts, vs, depth, chain, budget)
+  local need, order = {}, {}
+  for _, g in ipairs(recipeSlots(rc)) do
+    if g > 0 then
+      if not need[g] then need[g] = 0; order[#order + 1] = g end
+      need[g] = need[g] + crafts
+    end
+  end
+  table.sort(order, function(a, b) return #groupItems(a) < #groupItems(b) end)
+  local steps = {}
+  for _, g in ipairs(order) do
+    local left = need[g]
+    local opts = {}
+    for _, it in ipairs(groupItems(g)) do if vs[it] > 0 then opts[#opts + 1] = it end end
+    table.sort(opts, function(a, b) return vs[a] > vs[b] end)
+    for _, it in ipairs(opts) do
+      if left <= 0 then break end
+      local n = math.min(left, vs[it])
+      vs[it] = vs[it] - n; left = left - n
+    end
+    if left > 0 then
+      local sub = planMake(g, left, vs, depth, chain, budget)
+      if not sub then return nil, g end
+      for _, st in ipairs(sub) do steps[#steps + 1] = st end   -- (planMake already used up what it made)
+    end
+  end
+  return steps
+end
+
+-- whole plan for `crafts` of rc: list of sub-crafts to do first (empty = nothing to make first)
+local chainCache = {}
+local function chainPlan(rc, crafts, out)
+  local key = tostring(rc) .. ":" .. crafts .. ":" .. tostring(stats.scanned)
+  local c = chainCache[key]
+  if c == nil then
+    c = false
+    for d = 1, CHAIN_DEPTH do                       -- shortest chains first
+      local steps = planRecipe(rc, crafts, child(BASE), 0, { [out or -1] = true }, { n = CHAIN_BUDGET, max = d })
+      if steps then c = steps; break end
+    end
+    chainCache = { [key] = c }                       -- only keep the latest
+  end
+  return c or nil
+end
+-- can the shortfall for this one slot be crafted from what's in storage?
+local slotCache = {}
+local function slotCraftable(g, short, out)
+  local key = g .. ":" .. short .. ":" .. tostring(stats.scanned)
+  if slotCache[key] == nil then
+    if not next(slotCache) or slotCache._scan ~= stats.scanned then slotCache = { _scan = stats.scanned } end
+    local okp = false
+    for d = 1, CHAIN_DEPTH do
+      if planMake(g, short, child(BASE), 0, { [out or -1] = true }, { n = CHAIN_BUDGET, max = d }) then okp = true; break end
+    end
+    slotCache[key] = okp
+  end
+  return slotCache[key]
+end
+
+-- crafted parts land in the pickup; put them back into storage so the next step can use them
+local function pickupToStorage(id)
+  local pk = currentPickup()
+  if not pk then return end
+  local ok, l = pcall(peripheral.call, pk, "list")
+  if not ok or type(l) ~= "table" then return end
+  for slot, it in pairs(l) do
+    if it.name == id then
+      local left = it.count
+      local order, tried = {}, {}
+      local e = index[id]
+      if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
+      for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
+      for _, target in ipairs(order) do
+        if left <= 0 then break end
+        local ok2, n = pcall(peripheral.call, pk, "pushItems", target, slot)
+        if ok2 and type(n) == "number" then left = left - n end
+      end
+    end
+  end
+end
+
+local function chainCraft(t)
+  scan()
+  local steps
+  for d = 1, CHAIN_DEPTH do
+    steps = planRecipe(t.rc, t.crafts, child(BASE), 0, { [t.out] = true }, { n = CHAIN_BUDGET, max = d })
+    if steps then break end
+  end
+  if not steps then return 0, "missing ingredients that can't be crafted" end
+  local total = #steps + 1
+  for i, st in ipairs(steps) do
+    local name = itemName(st.out)
+    local made, err = autoCraft({ rc = st.rc, out = st.out, crafts = st.crafts, name = name,
+      step = "Step " .. i .. "/" .. total .. ": " })
+    if err then return 0, "while making " .. name .. ": " .. err end
+    pickupToStorage(R.id[st.out])
+  end
+  t.step = "Step " .. total .. "/" .. total .. ": "
+  local made, err = autoCraft(t)
+  return made, err, #steps
 end
 
 -- ORGANIZE: gather each item into one "home" chest (the one already holding the most of it),
@@ -1129,7 +1305,8 @@ local function drawRecipe()
     if g == 0 then
       fill(cx, cy, cx + CW - 1, cy + CH - 1, HILITE)
     else
-      local bg = one.missing[g] and RED or GRAY
+      local miss = plan.missing[g]
+      local bg = miss and (slotCraftable(g, miss, o) and GREEN or RED) or GRAY
       fill(cx, cy, cx + CW - 1, cy + CH - 1, bg)
       local label = one.pick[g] and itemName(one.pick[g]) or groupLabel(g)
       label = label:gsub("^#c:", "#"):gsub("^#minecraft:", "#"):gsub("[/_]", " ")
@@ -1147,11 +1324,11 @@ local function drawRecipe()
   cellText(ox, oy, (R.name[o]:gsub(" %(.*%)$", "")), WHITE, PURPLE)
   local mk = "x" .. commas(rc.n)
   text(ox + math.floor((CW - #mk) / 2), oy + CH + 1, mk, YELLOW, PANEL)
-  if one.short > 0 then                            -- hint under the result slot
+  if plan.short > 0 then                           -- hint under the result slot
     local hx = gx + 3 * CW + 4
-    text(hx, gy + 3 * CH - 2, "tap a red", GRAY, PANEL)
-    text(hx, gy + 3 * CH - 1, "slot to see", GRAY, PANEL)
-    text(hx, gy + 3 * CH, "its recipe", GRAY, PANEL)
+    text(hx, gy + 3 * CH - 2, "tap a slot", GRAY, PANEL)
+    text(hx, gy + 3 * CH - 1, "to see its", GRAY, PANEL)
+    text(hx, gy + 3 * CH, "recipe", GRAY, PANEL)
   end
   -- ingredient totals
   local y = 24
@@ -1164,17 +1341,20 @@ local function drawRecipe()
     local need = plan.need[g]
     local short = plan.missing[g] or 0
     local nm = plan.pick[g] and itemName(plan.pick[g]) or groupLabel(g)
-    local right = commas(need - short) .. "/" .. commas(need)
+    local canMake = short > 0 and slotCraftable(g, short, o)
+    local right = (canMake and "craft " .. commas(short) .. "  " or "") .. commas(need - short) .. "/" .. commas(need)
     text(RX1, y, fit(nm, 38 - #right - 1), short > 0 and WHITE or LGRAY, PANEL)
     local pk = plan.pick[g]
     hit("ing" .. k, RX1, y, RX2, y, function() drillInto(g, pk, short) end)
-    text(RX2 - #right + 1, y, right, short > 0 and RED or LIME, PANEL)
+    text(RX2 - #right + 1, y, right, short > 0 and (canMake and GREEN or RED) or LIME, PANEL)
     y = y + 1
   end
   -- how many
   local mx = maxCrafts(rc)
   text(RX1, 29, "CRAFTS: " .. UI.crafts, WHITE, PANEL)
-  text(RX1 + 14, 29, "(can make " .. commas(mx) .. ")", mx > 0 and LIME or RED, PANEL)
+  local chainOk = plan.short == 0 or chainPlan(rc, UI.crafts, o) ~= nil
+  if mx == 0 and chainOk then text(RX1 + 14, 29, "(after crafting parts)", GREEN, PANEL)
+  else text(RX1 + 14, 29, "(can make " .. commas(mx) .. ")", mx > 0 and LIME or RED, PANEL) end
   local steps = { { "-1", -1 }, { "+1", 1 }, { "+8", 8 }, { "MAX", 0 } }
   for i, st in ipairs(steps) do
     local x = RX1 + (i - 1) * 10
@@ -1186,10 +1366,11 @@ local function drawRecipe()
   if short == 0 and not fitsPickup(plan) then text(RX1, 33, "too much for the pickup - lower CRAFTS", ORANGE, PANEL) end
   local label = short == 0 and "SEND ITEMS" or (#plan.take > 0 and "SEND SOME" or "MISSING")
   local col = short == 0 and LIME or (#plan.take > 0 and YELLOW or GRAY)
-  local canAuto = short == 0 and not busy
-  button("autocraft", RX1, H - 3, RX1 + 11, H - 1, "CRAFT", BLACK, canAuto and CYAN or GRAY, function()
+  local canAuto = chainOk and not busy
+  if short > 0 and chainOk then text(RX1, 33, "CRAFT will make the green parts first", GREEN, PANEL) end
+  button("autocraft", RX1, H - 3, RX1 + 11, H - 1, "CRAFT", BLACK, canAuto and (short > 0 and GREEN or CYAN) or GRAY, function()
     if busy then return end
-    if short > 0 then setStatus("Missing ingredients - tap the red slots to see how to make them", RED); return end
+    if not chainOk then setStatus("Missing ingredients you can't craft yet - tap the red slots to see why", RED); return end
     queue({ kind = "autocraft", rc = rc, out = o, crafts = UI.crafts, name = itemName(o) })
     setStatus("Crafting " .. UI.crafts .. "x " .. itemName(o) .. "...", CYAN)
   end)
@@ -1229,12 +1410,12 @@ local function worker()
         setStatus("Organized! " .. commas(moves) .. " moves, freed " .. commas(math.max(0, freed)) .. " slots", LIME)
         if speaker then pcall(speaker.playNote, "chime", 1, 12) end
       elseif t.kind == "autocraft" then
-        local made, err = autoCraft(t)
+        local made, err, parts = chainCraft(t)
         busy = nil
         if err then
           setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err, made > 0 and YELLOW or RED)
         else
-          setStatus("Crafted " .. commas(made) .. " " .. t.name .. " - it's in the pickup", LIME)
+          setStatus("Crafted " .. commas(made) .. " " .. t.name .. (parts and parts > 0 and (" (made " .. parts .. " part" .. (parts == 1 and "" or "s") .. " first)") or "") .. " - it's in the pickup", LIME)
           if speaker then pcall(speaker.playNote, "chime", 1, 16) end
         end
         scan()
