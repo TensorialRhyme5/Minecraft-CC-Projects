@@ -36,8 +36,8 @@ pack's KubeJS changes). Pick one to see the 3x3 grid, what you have and what's m
 The recipe book (`storage/recipes.txt`) is downloaded into memory at startup, so it doesn't use the computer's disk.
 To rebuild it after a modpack update, see `storage/tools/`.
 
-**Straight to you (Advanced Peripherals Inventory Manager):** place an Inventory Manager touching the pickup barrel,
-wire it to the network, and put an AP Memory Card bound to you inside. Item pages then get `SEND TO: ME / BARREL`,
+**Straight to you (Advanced Peripherals Inventory Manager):** wire an Inventory Manager to the storage network
+(it can go anywhere on the network), and put an AP Memory Card bound to you inside. Item pages then get `SEND TO: ME / BARREL`,
 and the main screen gets `PUT AWAY MY INVENTORY` (main inventory only - hotbar, armor and offhand stay).
 
 **Auto-crafting (crafty turtle):** put a crafty turtle facing the pickup barrel with a full-block wired modem

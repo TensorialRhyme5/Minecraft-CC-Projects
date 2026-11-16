@@ -964,10 +964,10 @@ local function chainCraft(t)
 end
 
 -- ---------------------------------------------------------- straight to / from you (Advanced Peripherals Inventory Manager)
--- The Inventory Manager touches the pickup barrel and holds a Memory Card bound to you.
--- Sending: items go into the barrel, then the manager moves them into your inventory.
-local IM = { name = nil, dir = nil, owner = nil }
-local IM_DIRS = { "up", "down", "north", "south", "east", "west", "front", "back", "left", "right", "top", "bottom" }
+-- AP 0.8 (1.21): importItem(chestName, filter) moves chest -> you, exportItem(chestName, filter) moves you -> chest.
+-- The chest is any inventory this computer can see on the network; slots are numbered from 1.
+-- Your inventory as the manager sees it: 1-9 hotbar, 10-36 main, 37-40 armor, 41 offhand.
+local IM = { name = nil, owner = nil, err = nil }
 local function findIM()
   IM.name = nil
   for _, n in ipairs(peripheral.getNames()) do
@@ -981,77 +981,61 @@ local function findIM()
   end
   return IM.name
 end
--- the manager wants to know which side the barrel is on; learn it once
-local function imCall(method, item)
-  local order = {}
-  if IM.dir then order[1] = IM.dir end
-  for _, d in ipairs(IM_DIRS) do if d ~= IM.dir then order[#order + 1] = d end end
-  local lastErr
-  for _, d in ipairs(order) do
-    local ok, n = pcall(peripheral.call, IM.name, method, d, item)
-    if ok and type(n) == "number" and n > 0 then IM.dir = d; return n end
-    if not ok then lastErr = n end
-  end
-  return 0, lastErr
+local function imMove(method, chest, filter)
+  local ok, n, err = pcall(peripheral.call, IM.name, method, chest, filter)
+  if not ok then return 0, tostring(n):gsub("^.-:%d+: ", "") end
+  if type(n) ~= "number" then return 0, tostring(err or "nothing moved") end
+  return n
 end
 
 local function sendToPlayer(key, want)
   if not IM.name and not findIM() then return 0, "no Inventory Manager on the network" end
   local e = key:find("#", 1, true) and index[key] or byName[key]
   if not e or e.count == 0 then return 0, "none in storage" end
-  local name = e.name
   local total, left = 0, math.min(want, e.count)
-  while left > 0 do
-    local n = retrieve(key, math.min(left, 64 * 9))
-    if n == 0 then return total, total > 0 and nil or "couldn't reach the pickup" end
-    local moved = 0
-    while moved < n do
-      local m, err = imCall("addItemToPlayer", { name = name, count = n - moved })
-      if m == 0 then
-        if not IM.owner then return total + moved, "put a Memory Card bound to you in the Inventory Manager" end
-        return total + moved, err and ("Inventory Manager: " .. tostring(err)) or "your inventory is full - the rest is in the pickup"
-      end
-      moved = moved + m
+  for _, loc in ipairs(e.locs) do                 -- straight from each chest slot into your inventory
+    if left <= 0 then break end
+    local n, err = imMove("importItem", loc.inv, { name = e.name, fromSlot = loc.slot, count = math.min(left, loc.count) })
+    if n == 0 and err then
+      if total > 0 then return total, "your inventory is full" end
+      return 0, (err:find("memory card") and "put a Memory Card bound to you in the Inventory Manager") or err
     end
-    total, left = total + moved, left - n
+    if n == 0 then return total, total > 0 and "your inventory is full" or "couldn't move it (inventory full?)" end
+    total, left = total + n, left - n
   end
   return total
 end
 
--- everything in the pickup goes back into storage
-local function pickupAllToStorage()
-  local pk = currentPickup()
-  if not pk then return end
-  local ok, l = pcall(peripheral.call, pk, "list")
-  if not ok or type(l) ~= "table" then return end
-  for slot, it in pairs(l) do
-    local left, tried, order = it.count, {}, {}
-    local e = byName[it.name]
-    if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
-    for _, n in ipairs(storages) do if not tried[n] then order[#order + 1] = n end end
-    for _, target in ipairs(order) do
-      if left <= 0 then break end
-      local ok2, n = pcall(peripheral.call, pk, "pushItems", target, slot)
-      if ok2 and type(n) == "number" then left = left - n end
-    end
-  end
+-- where to put an item: chests that already hold it first, then any storage chest
+local function homesFor(name)
+  local order, seen = {}, {}
+  local e = byName[name]
+  if e then for _, loc in ipairs(e.locs) do if not seen[loc.inv] then seen[loc.inv] = true; order[#order + 1] = loc.inv end end end
+  for _, n in ipairs(storages) do if not seen[n] then order[#order + 1] = n end end
+  return order
 end
 
--- empty your main inventory (not hotbar / armor / offhand) into storage
+-- empty your main inventory (slots 10-36) straight into storage; hotbar, armor and offhand stay
 local function dumpPlayer()
   if not IM.name and not findIM() then return 0, "no Inventory Manager on the network" end
-  local ok, list = pcall(peripheral.call, IM.name, "getItems")
-  if not ok or type(list) ~= "table" then return 0, IM.owner and "couldn't read your inventory" or "put a Memory Card bound to you in the Inventory Manager" end
-  local moved, sinceStore = 0, 0
-  for _, it in pairs(list) do
-    local slot = tonumber(it.slot)
-    if slot and slot >= 9 and slot <= 35 and it.name then
-      local n = imCall("removeItemFromPlayer", { name = it.name, count = it.count, fromSlot = slot })
-      moved, sinceStore = moved + n, sinceStore + 1
-      if sinceStore >= 20 then pickupAllToStorage(); sinceStore = 0 end   -- don't overflow the barrel
+  local ok, list = pcall(peripheral.call, IM.name, "list")
+  if not ok or type(list) ~= "table" then
+    return 0, tostring(list):find("memory card") and "put a Memory Card bound to you in the Inventory Manager" or "couldn't read your inventory"
+  end
+  local moved, lastErr = 0, nil
+  for slot, it in pairs(list) do
+    slot = tonumber(slot)
+    if slot and slot >= 10 and slot <= 36 and it.name then
+      local left = it.count
+      for _, chest in ipairs(homesFor(it.name)) do
+        if left <= 0 then break end
+        local n, err = imMove("exportItem", chest, { name = it.name, fromSlot = slot, count = left })
+        if err then lastErr = err end
+        left, moved = left - n, moved + n
+      end
     end
   end
-  pickupAllToStorage()
+  if moved == 0 and lastErr then return 0, lastErr end
   return moved
 end
 
