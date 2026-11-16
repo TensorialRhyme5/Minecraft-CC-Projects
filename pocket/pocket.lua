@@ -214,10 +214,12 @@ local function drawItems()
     text(2, 4, fit(it.name, W - 2), C.accent)
     text(2, 5, it.id:gsub("#.*$", ""), C.dim)
     text(2, 7, "In storage: ", C.dim); text(14, 7, commas(it.count), C.cyan)
-    text(2, 9, "Send to:", C.accent)
+    text(2, 9, "To:", C.accent)
     local me = UI.toMe and (not S.info or S.info.im)
-    button("tome", 11, 9, 17, 9, fit(PAIRED and PAIRED.player or "ME", 7), me and C.bg or C.text, me and C.cyan or C.panel, function() UI.toMe = true end)
-    button("topk", 19, 9, W - 1, 9, "BARREL", me and C.text or C.bg, me and C.panel or C.good, function() UI.toMe = false end)
+    local who = (S.info and type(S.info.owner) == "string" and S.info.owner) or (PAIRED and PAIRED.player) or "ME"
+    if who:match("^%x+%-%x+%-%x+%-%x+%-%x+$") then who = "ME" end   -- an account ID, not a name
+    button("tome", 6, 9, 16, 9, fit(who, 11), me and C.bg or C.text, me and C.cyan or C.panel, function() UI.toMe = true end)
+    button("topk", 18, 9, W - 1, 9, "BARREL", me and C.text or C.bg, me and C.panel or C.good, function() UI.toMe = false end)
     local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
     for i, a in ipairs(amounts) do
       local x = 2 + (i - 1) * 6

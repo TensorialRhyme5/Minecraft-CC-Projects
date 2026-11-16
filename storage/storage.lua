@@ -1518,6 +1518,8 @@ end
 local drawRemotes
 -- names for the paired pocket remotes (by pocket computer ID)
 local REMOTE_NAMES = { [5] = "TensorialRhyme5", [6] = "Haydog098" }
+-- whose inventory each pocket sends to (must match the names in IM_NAMES)
+local REMOTE_PLAYER = { [5] = "TEN", [6] = "Haydog098" }
 local function remoteName(id)
   local n = REMOTE_NAMES[tonumber(id)]
   return n and (n .. " (#" .. id .. ")") or ("#" .. id)
@@ -1784,6 +1786,7 @@ local function verify(msg)
   local dev = tonumber(msg.dev)
   local r = dev and data.remotes[dev]
   if not r then return nil, "not paired" end
+  if REMOTE_PLAYER[dev] and r.player ~= REMOTE_PLAYER[dev] then r.player = REMOTE_PLAYER[dev]; dirty = true end
   local ctr = tonumber(msg.ctr)
   if not ctr or ctr <= (r.ctr or 0) then return nil, "old or replayed request" end
   if msg.mac ~= sha256(r.key .. "|" .. ctr .. "|" .. canon(msg)) then return nil, "bad signature" end
