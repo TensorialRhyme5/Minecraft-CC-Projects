@@ -1021,7 +1021,7 @@ end
 local IMS = {}                 -- every Inventory Manager: { name, owner }
 -- who each manager belongs to, by its number (inventory_manager_0 = 0). Used when the
 -- game hands back an account ID (98d1e7ad-...) instead of the player's name.
-local IM_NAMES = { [0] = "TensorialRhyme5", [2] = "Haydog098" }
+local IM_NAMES = { [0] = "TEN", [2] = "Haydog098" }
 local function isUUID(s) return type(s) == "string" and s:match("^%x+%-%x+%-%x+%-%x+%-%x+$") ~= nil end
 local function findIM()
   local list = {}
@@ -1032,11 +1032,9 @@ local function findIM()
       local owner = (ok and type(o) == "string") and o or nil
       local num = tonumber(n:match("(%d+)$"))
       local nice = num and IM_NAMES[num]
-      if owner and nice and (isUUID(owner) or owner:lower() == nice:lower()) then
-        if isUUID(owner) then
-          -- pocket remotes paired while the ID was showing: move them to the name
-          for _, r in pairs(data.remotes) do if r.player == owner then r.player = nice; dirty = true end end
-        end
+      if owner and nice then
+        -- pocket remotes paired under the ID or the full name: move them to the short name
+        for _, r in pairs(data.remotes) do if r.player == owner and owner ~= nice then r.player = nice; dirty = true end end
         owner = nice
       end
       list[#list + 1] = { name = n, owner = owner }

@@ -426,6 +426,11 @@ local function main()
           if UI.sel then for _, it in ipairs(msg.items or {}) do if it.id == UI.sel.id then UI.sel.count = it.count end end end
         end
         if msg.type == "results" or msg.type == "info" then S.info, S.infoAt = msg, t end
+        -- the storage renamed who this pocket belongs to: keep the saved copy in step
+        if PAIRED and type(msg.owner) == "string" and msg.owner ~= PAIRED.player and (msg.type == "results" or msg.type == "info") then
+          PAIRED.player = msg.owner
+          local f = fs.open(KEYFILE, "w"); f.write(textutils.serialize(PAIRED)); f.close()
+        end
       elseif c == MUSIC_PROTO and type(msg) == "table" and msg.type == "state" then
         M.st, M.at, M.id = msg, t, a
       end
