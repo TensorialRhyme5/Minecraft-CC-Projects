@@ -5,7 +5,14 @@ def ascii(s):
     return ''.join(c for c in s if 32 <= ord(c) < 127)
 d = json.load(open(sys.argv[1]))
 OUT = sys.argv[2]
-names, rawtags = d['names'], d['tags']
+names = d['names']
+ns = lambda x: x if ':' in x else 'minecraft:' + x
+rawtags = {}
+for k, vs in d['tags'].items():
+    lst = rawtags.setdefault(ns(k), [])
+    for v in vs:
+        v = ('#' + ns(v[1:])) if v.startswith('#') else ns(v)
+        if v not in lst: lst.append(v)
 strip = lambda s: re.sub(r'\[.*$', '', s.strip())
 
 items, iidx = [], {}
@@ -40,7 +47,7 @@ def ing(opts):
     toks = []
     for o in opts:
         if o == '*': continue
-        if o.startswith('#'): tk = 't%d' % tag(o[1:])
+        if o.startswith('#'): tk = 't%d' % tag(ns(o[1:]))
         else: tk = str(item(o))
         if tk not in toks: toks.append(tk)
     key = ','.join(toks)

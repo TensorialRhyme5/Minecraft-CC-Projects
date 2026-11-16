@@ -5,6 +5,7 @@ import zipfile, json, os, re, sys
 MODS = '/mnt/user-data/uploads/mods'
 KJS = '/mnt/user-data/uploads/kubejs'
 VAN = '/home/claude/recipes_work/vanilla'
+NEO = '/home/claude/recipes_work/neoforge/src/generated/resources'
 VLANG = '/home/claude/recipes_work/en_us.json'
 OUT = '/home/claude/recipes_work/base.json'
 
@@ -225,6 +226,12 @@ def main():
         for f in fs:
             vfiles.append(os.path.relpath(os.path.join(root, f), VAN).replace(os.sep, '/'))
     load_tree(lambda p: open(os.path.join(VAN, p), 'rb').read(), vfiles)
+    # NeoForge's own data (the shared c: tags like c:ingots/iron, plus its vanilla recipe tweaks)
+    nfiles = []
+    for root, _, fs in os.walk(os.path.join(NEO, 'data')):
+        for f in fs:
+            nfiles.append(os.path.relpath(os.path.join(root, f), NEO).replace(os.sep, '/'))
+    load_tree(lambda p: open(os.path.join(NEO, p), 'rb').read(), nfiles)
     for k, v in json.load(open(VLANG)).items():
         if (k.startswith('item.minecraft.') or k.startswith('block.minecraft.')) and k.count('.') == 2:
             names.setdefault('minecraft:' + k.split('.')[2], v)

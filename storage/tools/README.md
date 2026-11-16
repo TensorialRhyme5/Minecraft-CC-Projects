@@ -1,7 +1,8 @@
 # Rebuilding recipes.txt
 
 1. Copy the pack's `mods/*.jar` into one folder and `kubejs/` into another.
-2. Clone vanilla data: `git clone --depth 1 -b 1.21.1-data https://github.com/misode/mcmeta.git vanilla`
+2. Clone NeoForge data: `git clone --depth 1 --filter=blob:none --sparse -b 1.21.1 https://github.com/neoforged/NeoForge.git neoforge` then `git -C neoforge sparse-checkout set src/generated/resources/data`.
+   Clone vanilla data: `git clone --depth 1 -b 1.21.1-data https://github.com/misode/mcmeta.git vanilla`
    and download `https://raw.githubusercontent.com/misode/mcmeta/1.21.1-assets-json/assets/minecraft/lang/en_us.json`.
 3. Edit the paths at the top of `extract_recipes.py`, then:
 
