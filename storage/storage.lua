@@ -920,36 +920,64 @@ local function drawRecipe()
   end
   local plan = craftPlan(rc, UI.crafts)
   local one = craftPlan(rc, 1)
-  -- grid (shapeless recipes are laid out in order)
-  local slots = recipeSlots(rc)
+  -- grid: 7x4-character cells look (nearly) square on a monitor (characters are taller than wide)
+  local CW, CH = 7, 4
+  local function wrap(label, w, maxl)
+    local lines, cur = {}, ""
+    local words = {}
+    for word in label:gmatch("%S+") do words[#words + 1] = word end
+    for wi, word in ipairs(words) do
+      if #word > w and #words > 1 then word = word:sub(1, w - 1) .. "." end   -- "Redstone" -> "Redsto."
+      while #word > w do                           -- a single long word gets split over lines
+        if cur ~= "" then lines[#lines + 1] = cur; cur = "" end
+        lines[#lines + 1] = word:sub(1, w); word = word:sub(w + 1)
+      end
+      if cur == "" then cur = word elseif #cur + 1 + #word <= w then cur = cur .. " " .. word
+      else lines[#lines + 1] = cur; cur = word end
+    end
+    if cur ~= "" then lines[#lines + 1] = cur end
+    if #lines > maxl then lines[maxl] = fit(lines[maxl] .. lines[maxl + 1], w); for k = #lines, maxl + 1, -1 do lines[k] = nil end end
+    return lines
+  end
+  local function cellText(cx, cy, label, fg, bg)
+    local lines = wrap(label, CW, CH)
+    local top = cy + math.floor((CH - #lines) / 2)
+    for k, l in ipairs(lines) do text(cx + math.floor((CW - #l) / 2), top + k - 1, l, fg, bg) end
+  end
+  local gx, gy = RX1, 9
+  fill(gx - 1, gy - 1, gx + 3 * CW + 2, gy + 3 * CH + 2, BLACK)   -- crafting table frame
+  local slots = recipeSlots(rc)                    -- shapeless recipes are laid out in order
   for cell = 1, 9 do
     local g = slots[cell] or 0
-    local cx = RX1 + ((cell - 1) % 3) * 13
-    local cy = 9 + math.floor((cell - 1) / 3) * 3
+    local cx = gx + ((cell - 1) % 3) * (CW + 1)
+    local cy = gy + math.floor((cell - 1) / 3) * (CH + 1)
     if g == 0 then
-      fill(cx, cy, cx + 11, cy + 1, BLACK)
+      fill(cx, cy, cx + CW - 1, cy + CH - 1, HILITE)
     else
-      local okSlot = not one.missing[g]
-      local bg = okSlot and GRAY or RED
-      fill(cx, cy, cx + 11, cy + 1, bg)
+      local bg = one.missing[g] and RED or GRAY
+      fill(cx, cy, cx + CW - 1, cy + CH - 1, bg)
       local label = one.pick[g] and itemName(one.pick[g]) or groupLabel(g)
-      label = label:gsub("^#c:", "#"):gsub("^#minecraft:", "#")
-      local l1, l2 = label, ""
-      if #label > 12 then                          -- wrap on a space when possible
-        local cut = 12
-        for k = 12, 4, -1 do if label:sub(k, k) == " " then cut = k; break end end
-        l1, l2 = label:sub(1, cut):gsub("%s+$", ""), label:sub(cut + 1):gsub("^%s+", "")
-      end
-      text(cx, cy, l1, WHITE, bg)
-      if l2 ~= "" then text(cx, cy + 1, fit(l2, 12), WHITE, bg) end
+      label = label:gsub("^#c:", "#"):gsub("^#minecraft:", "#"):gsub("[/_]", " ")
+      cellText(cx, cy, label, WHITE, bg)
     end
   end
+  -- arrow + result slot
+  local midY = gy + CH + 1 + math.floor(CH / 2)
+  text(gx + 3 * CW + 4, midY - 1, "\140\140" .. string.char(16), YELLOW, PANEL)
+  local ox, oy = gx + 3 * CW + 8, gy + CH + 1
+  fill(ox - 1, oy - 1, ox + CW, oy + CH, BLACK)
+  fill(ox, oy, ox + CW - 1, oy + CH - 1, PURPLE)
+  cellText(ox, oy, (R.name[o]:gsub(" %(.*%)$", "")), WHITE, PURPLE)
+  local mk = "x" .. commas(rc.n)
+  text(ox + math.floor((CW - #mk) / 2), oy + CH + 1, mk, YELLOW, PANEL)
   -- ingredient totals
-  local y = 18
+  local y = 24
   text(RX1, y, "NEED FOR " .. UI.crafts .. " CRAFT" .. (UI.crafts == 1 and "" or "S") .. " (" .. commas(rc.n * UI.crafts) .. " made)", YELLOW, PANEL)
   y = y + 1
-  for _, g in ipairs(plan.order) do
-    if y > 27 then break end
+  for k, g in ipairs(plan.order) do
+    if y == 28 and #plan.order > k then
+      text(RX1, y, "+" .. (#plan.order - k + 1) .. " more ingredients", GRAY, PANEL); break
+    end
     local need = plan.need[g]
     local short = plan.missing[g] or 0
     local nm = plan.pick[g] and itemName(plan.pick[g]) or groupLabel(g)
