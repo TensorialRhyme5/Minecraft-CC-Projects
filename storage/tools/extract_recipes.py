@@ -169,6 +169,12 @@ def norm_result(r):
 
 def parse_recipe(rid, j):
     t = str(j.get('type', ''))
+    if t in ('minecraft:smelting', 'minecraft:blasting', 'smelting', 'blasting'):
+        ing = norm_ing(j.get('ingredient'))
+        out, n = norm_result(j.get('result'))
+        if not ing or not out:
+            return None
+        return {'id': rid, 'k': 'b' if t.endswith('blasting') else 'f', 'out': out, 'n': n, 'c': ing}
     if not re.search(r'shaped|shapeless', t) or 'mechanical' in t or 'cooking_pot' in t:
         return None
     out, n = norm_result(j.get('result') or j.get('output'))

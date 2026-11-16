@@ -606,6 +606,10 @@ local function drawControl()
       local word = p.tps >= 18 and "smooth" or (p.tps >= 12 and "a bit laggy" or "very laggy")
       text(W - #word + 1, y, word, tc)
     else text(W - 10, y, "checking...", C.dim) end
+    if p.sotd then                                         -- song of the day
+      text(1, H - 2, "\14", C.accent); text(3, H - 2, fit(p.sotd.title, W - 2), C.accent)
+      text(3, H - 1, fit(p.sotd.artist or "", W - 2), C.dim)
+    end
   else
     local list = p.players
     text(1, y, "ONLINE" .. (list and (" (" .. #list .. ")") or ""), C.accent)

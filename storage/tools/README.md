@@ -12,4 +12,5 @@ node kjs_apply.js base.json <kubejs>/server_scripts final.json   # runs the pack
 python3 compact_recipes.py final.json ../recipes.txt
 ```
 
-Only crafting-table (3x3 shaped/shapeless) recipes are kept. Machine recipes are skipped.
+Crafting-table (3x3 shaped/shapeless) recipes become R lines and furnace / blast furnace recipes become S lines
+(`S out count f|b group`). Other machine recipes are skipped.

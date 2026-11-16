@@ -57,10 +57,19 @@ def ing(opts):
     return gidx[key]
 
 rlines = []
+slines = []
 seen = set()
 skipped = 0
 for r in d['recipes']:
     out = item(r['out'])
+    if r['k'] in ('f', 'b'):
+        k = ing(r['c'])
+        if k is None: skipped += 1; continue
+        key = (out, r['n'], r['k'], k)
+        if key in seen: continue
+        seen.add(key)
+        slines.append('S\t%d\t%d\t%s\t%d' % (out, r['n'], r['k'], k))
+        continue
     if r['k'] == 's':
         g = []
         bad = False
@@ -97,6 +106,6 @@ ilines = ['I\t%s\t%s' % (i, ascii(pretty(i)).strip() or i) for i in items]
 glines = ['G\t' + g for g in ings]
 with open(OUT, 'w', newline='\n') as f:
     f.write('V\t1\t%d\t%d\t%d\t%d\n' % (len(items), len(tags), len(ings), len(rlines)))
-    for block in (ilines, tlines, glines, rlines):
+    for block in (ilines, tlines, glines, rlines, slines):
         f.write('\n'.join(block) + '\n')
-print('items', len(items), 'tags', len(tags), 'ings', len(ings), 'recipes', len(rlines), 'skipped', skipped)
+print('items', len(items), 'tags', len(tags), 'ings', len(ings), 'recipes', len(rlines), 'cooking', len(slines), 'skipped', skipped)

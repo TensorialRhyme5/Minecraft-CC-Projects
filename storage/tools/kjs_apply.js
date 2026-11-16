@@ -65,7 +65,7 @@ function strMatch(pat, val) {
   return String(pat) === val;
 }
 function ingHas(r, pat) {
-  const all = r.k === 's' ? r.g.filter(Boolean) : r.i;
+  const all = r.k === 's' ? r.g.filter(Boolean) : (r.k === 'f' || r.k === 'b') ? [r.c] : r.i;
   const want = parseStack(pat);
   return all.some(opts => opts.some(o => (pat instanceof RegExp ? strMatch(pat, o) : want && want.opts.includes(o))));
 }
@@ -88,7 +88,10 @@ function matches(r, f) {
         case 'input': return ingHas(r, pv);
         case 'type': {
           const t = String(pv);
-          if (pv instanceof RegExp) return pv.test(r.k === 's' ? 'minecraft:crafting_shaped' : 'minecraft:crafting_shapeless');
+          const full = { s: 'minecraft:crafting_shaped', l: 'minecraft:crafting_shapeless', f: 'minecraft:smelting', b: 'minecraft:blasting' }[r.k];
+          if (pv instanceof RegExp) return pv.test(full);
+          if (r.k === 'f') return /smelting$/.test(t);
+          if (r.k === 'b') return /blasting$/.test(t);
           return r.k === 's' ? /crafting_shaped$|shaped/.test(t) : /shapeless/.test(t);
         }
         default: return false;
@@ -138,7 +141,7 @@ function recipeEvent() {
       for (const r of recipes) {
         if (!matches(r, f) && !(f && typeof f === 'object' && !Object.keys(f).length)) continue;
         const fix = (opts) => (opts && opts.some(o => a.opts.includes(o)) ? (log.replaced++, b.opts.slice()) : opts);
-        if (r.k === 's') r.g = r.g.map(fix); else r.i = r.i.map(fix);
+        if (r.k === 's') r.g = r.g.map(fix); else if (r.k === 'f' || r.k === 'b') r.c = fix(r.c); else r.i = r.i.map(fix);
       }
     },
     replaceOutput(f, from, to) {
@@ -148,6 +151,7 @@ function recipeEvent() {
     custom(j) {
       try {
         const t = String(j.type || '');
+        if (/smelting$/.test(t) || /blasting$/.test(t)) return e._cook(/blasting$/.test(t) ? 'b' : 'f', j.result, j.ingredient);
         if (!/crafting_shaped|crafting_shapeless/.test(t)) return ANY;
         const res = j.result || j.output; const o = outOf(res); if (!o) return ANY;
         if (j.pattern && j.key) {
@@ -159,7 +163,14 @@ function recipeEvent() {
       return ANY;
     },
     findRecipes: () => ANY, forEachRecipe: () => {}, countRecipes: () => 0, containsRecipe: () => false,
-    smithing: () => ANY, smelting: () => ANY, blasting: () => ANY, smoking: () => ANY,
+    smithing: () => ANY, smoking: () => ANY,
+    smelting(out, input) { return e._cook('f', out, input); },
+    blasting(out, input) { return e._cook('b', out, input); },
+    _cook(k, out, input) {
+      const o = outOf(out); const s = parseStack(input);
+      if (!o || !s) return ANY;
+      return addRecipe({ id: 'kubejs:auto_' + (autoId++), k, out: o.out, n: o.n, c: s.opts });
+    },
     campfireCooking: () => ANY, stonecutting: () => ANY,
   };
   return new Proxy(e, { get: (t, k) => (k in t ? t[k] : ANY) });

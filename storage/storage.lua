@@ -89,7 +89,7 @@ local function fit(s, w) if #s > w then return s:sub(1, math.max(1, w - 1)) .. "
 
 -- ---------------------------------------------------------- saved settings (alerts + item names)
 local SAVE = "storage_data.txt"
-local data = { alerts = {}, names = {}, sort = "count", remotes = {} }
+local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {} }
 if fs.exists(SAVE) then
   local f = fs.open(SAVE, "r")
   local ok, d = pcall(textutils.unserialize, f.readAll())
@@ -99,6 +99,7 @@ if fs.exists(SAVE) then
     data.remotes = type(d.remotes) == "table" and d.remotes or {}
     data.names = type(d.names) == "table" and d.names or {}
     data.sort = d.sort == "name" and "name" or "count"
+    data.smeltRule = type(d.smeltRule) == "table" and d.smeltRule or {}
   end
 end
 local dirty = false
@@ -211,6 +212,7 @@ end
 
 local function isInventory(name)
   if name == CFG.input or isPickupName(name) then return false end
+  if name:find("furnace") or name:find("smoker") then return false end     -- furnaces belong to the smelter
   if monNames[name] then return false end
   if peripheral.hasType then
     local ok, has = pcall(peripheral.hasType, name, "inventory")
@@ -253,6 +255,7 @@ local function loadRecipes()
   if not body or #body < 1000 then R.state, R.msg = "failed", "Recipe file was empty (tap RECIPES to retry)"; return end
   R.msg = "Reading recipe book..."
   local id, name, byId, tagName, tagRaw, grpRaw, byOut = {}, {}, {}, {}, {}, {}, {}
+  local cook = {}
   local ni, nt, ng, i = 0, 0, 0, 0
   for line in body:gmatch("[^\n]+") do
     i = i + 1; rYield(i)
@@ -264,6 +267,9 @@ local function loadRecipes()
         local l = byOut[out]; if not l then l = {}; byOut[out] = l end
         l[#l + 1] = { n = tonumber(n), k = k, g = g }
       end
+    elseif kind == "S" then
+      local out, n, k, g = line:match("^S\t(%d+)\t(%d+)\t(%a)\t(%d+)$")
+      if out then cook[#cook + 1] = { out = tonumber(out), n = tonumber(n), k = k, g = tonumber(g) } end
     elseif kind == "G" then ng = ng + 1; grpRaw[ng] = line:sub(3)
     elseif kind == "I" then
       local a, b = line:match("^I\t([^\t]+)\t(.*)$")
@@ -283,6 +289,7 @@ local function loadRecipes()
   for o in pairs(byOut) do outs[#outs + 1] = o end
   table.sort(outs, function(a, b) return name[a] < name[b] end)
   R.id, R.name, R.byId, R.tagName, R.tagRaw, R.grpRaw, R.byOut, R.outs = id, name, byId, tagName, tagRaw, grpRaw, byOut, outs
+  R.cook, R.cookSig = cook, os.epoch("utc")
   R.tagMem, R.grpMem = {}, {}
   R.lower = {}
   R.lname, R.lns = {}, {}
@@ -417,6 +424,294 @@ end
 
 local UI = { search = "", page = 1, selected = nil, perPage = 0, lowAlerted = {},
   mode = "items", rsel = nil, rvar = 1, crafts = 1, canMake = false }
+
+local hits, flash = {}, {}
+local function hit(id, x1, y1, x2, y2, fn) hits[#hits + 1] = { id = id, x1 = x1, y1 = y1, x2 = x2, y2 = y2, fn = fn } end
+local function button(id, x1, y1, x2, y2, label, fg, bg, fn)
+  if flash[id] and now() - flash[id] < 0.15 then fg, bg = BLACK, WHITE end
+  fill(x1, y1, x2, y2, bg)
+  text(x1 + math.floor((x2 - x1 + 1 - #label) / 2), math.floor((y1 + y2) / 2), label, fg, bg)
+  hit(id, x1, y1, x2, y2, fn)
+end
+
+local LX1, LX2 = 2, 80               -- item list area
+local RX1, RX2 = 83, 121             -- right panel
+
+-- ---------------------------------------------------------- smelter: furnaces + blast furnaces on the network
+-- Items that can be smelted wait in the input chest until you choose on the screen (or have an
+-- ALWAYS / NEVER rule). Smelting jobs pull from storage into the furnaces, keep them fuelled and
+-- put the results back. Crafting chains use it too (e.g. sand -> glass -> glass panes).
+local SM
+do
+  SM = { furnaces = {}, jobs = {}, asks = {}, once = {}, built = nil, noFuel = false }
+  local FUELS = { "minecraft:charcoal", "minecraft:coal", "minecraft:coal_block", "minecraft:blaze_rod", "minecraft:dried_kelp_block" }
+  function SM.find()
+    local list, nb = {}, 0
+    for _, n in ipairs(peripheral.getNames()) do
+      if n:find("^minecraft:blast_furnace") then list[#list + 1] = { name = n, blast = true }; nb = nb + 1
+      elseif n:find("^minecraft:furnace") then list[#list + 1] = { name = n, blast = false } end
+    end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    for _, f in ipairs(list) do for _, old in ipairs(SM.furnaces) do if old.name == f.name then f.cur = old.cur end end end
+    SM.furnaces, SM.nBlast, SM.nFurn = list, nb, #list - nb
+  end
+  function SM.active() return #SM.furnaces > 0 and R.state == "ready" end
+  -- lookups built from the recipe book: what each item smelts into, and how to make an item by smelting
+  local function build()
+    if SM.built == R.cookSig then return end
+    SM.out, SM.inp = {}, {}
+    local merged = {}
+    for _, c in ipairs(R.cook or {}) do
+      local key = c.out .. ":" .. c.g
+      local rc = merged[key]
+      if not rc then
+        rc = { smelt = true, n = c.n, g = tostring(c.g), k = "c", out = c.out }
+        merged[key] = rc
+        SM.out[c.out] = SM.out[c.out] or {}
+        table.insert(SM.out[c.out], rc)
+      end
+      if c.k == "b" then rc.b = true else rc.f = true end
+    end
+    for _, l in pairs(SM.out) do
+      for _, rc in ipairs(l) do
+        for _, it in ipairs(groupItems(tonumber(rc.g))) do
+          local id = R.id[it]
+          if id and not SM.inp[id] then SM.inp[id] = rc end
+        end
+      end
+    end
+    SM.built = R.cookSig
+  end
+  function SM.recs(it) if not SM.active() then return nil end build(); return SM.out[it] end
+  function SM.info(id) if R.state ~= "ready" then return nil end build(); return SM.inp[id] end
+  local function nameOf(id) return data.names[id] or (R.byId[id] and R.name[R.byId[id]]) or prettyId(id) end
+  SM.nameOf = nameOf
+
+  -- what to do with an item that just landed in the input chest: "store", "smelt" or "ask"
+  function SM.decide(id, count)
+    if not SM.active() then return "store" end
+    local rc = SM.info(id)
+    if not rc then return "store" end
+    local rule = data.smeltRule[id]
+    if rule == "always" then return "smelt" elseif rule == "never" then return "store" end
+    if SM.once[id] then return SM.once[id] end
+    SM.asks[id] = (SM.asks[id] or 0) + count
+    return "ask"
+  end
+  function SM.add(id, n, rc)
+    rc = rc or SM.info(id)
+    if not rc or n <= 0 then return nil end
+    local j = { id = id, left = n, total = n, outId = R.id[rc.out], b = rc.b, f = rc.f }
+    setStatus("Smelting " .. commas(n) .. " " .. nameOf(id) .. "...", ORANGE)
+    SM.jobs[#SM.jobs + 1] = j
+    os.queueEvent("smelt_tick")
+    return j
+  end
+
+  -- move a furnace slot into storage (chests that already hold the item first)
+  local function storeFrom(src, slot, itemId, count)
+    local order, tried = {}, {}
+    local e = byName[itemId]
+    if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
+    for _, nm in ipairs(storages) do if not tried[nm] then order[#order + 1] = nm end end
+    local left = count
+    for _, target in ipairs(order) do
+      if left <= 0 then break end
+      local ok, n = pcall(peripheral.call, src, "pushItems", target, slot)
+      if ok and type(n) == "number" then left = left - n end
+    end
+    return count - left
+  end
+  -- move up to `want` of an item from storage into a furnace slot
+  local function pullInto(furnace, slot, itemId, want)
+    local e = byName[itemId]
+    if not e then return 0 end
+    local got = 0
+    for _, loc in ipairs(e.locs) do
+      if got >= want then break end
+      if loc.count > 0 then
+        local ok, n = pcall(peripheral.call, loc.inv, "pushItems", furnace, loc.slot, math.min(want - got, loc.count), slot)
+        if ok and type(n) == "number" and n > 0 then got = got + n; loc.count = loc.count - n; e.count = e.count - n end
+      end
+    end
+    return got
+  end
+  local function pickFuel(avoid)
+    for _, id in ipairs(FUELS) do
+      local e = byName[id]
+      if e and e.count > 0 and id ~= avoid then return id end
+    end
+  end
+  local function fits(f, j) return (f.blast and j.b) or ((not f.blast) and j.f) end
+  function SM.tick()
+    if #SM.furnaces == 0 then return end
+    SM.noFuel = false
+    for _, f in ipairs(SM.furnaces) do
+      local ok, l = pcall(peripheral.call, f.name, "list")
+      if ok and type(l) == "table" then
+        if l[3] then storeFrom(f.name, 3, l[3].name, l[3].count) end      -- finished items back to storage
+        local inp = l[1]
+        f.cur = inp and inp.name or nil
+        local job
+        for _, j in ipairs(SM.jobs) do
+          if j.left > 0 and ((inp and j.id == inp.name) or (not inp and fits(f, j))) then job = j; break end
+        end
+        if not job and not inp and not f.blast then                       -- a regular furnace can help with blast-only? no: only what it can do
+          job = nil
+        end
+        if job then
+          local room = 64 - (inp and inp.count or 0)
+          local n = room > 0 and pullInto(f.name, 1, job.id, math.min(room, job.left)) or 0
+          job.left = job.left - n
+          if n > 0 then f.cur = job.id
+          elseif not inp and (not byName[job.id] or byName[job.id].count <= 0) then job.left, job.short = 0, true end
+        end
+        if f.cur then                                                     -- keep it fuelled while it has work
+          local fu = l[2]
+          if not fu or fu.count < 8 then
+            local fid = fu and fu.name or pickFuel(f.cur)
+            if fid then pullInto(f.name, 2, fid, 16 - (fu and fu.count or 0)) elseif not fu then SM.noFuel = true end
+          end
+        end
+      end
+    end
+    for i = #SM.jobs, 1, -1 do
+      local j = SM.jobs[i]
+      if j.left <= 0 then
+        local still = false
+        for _, f in ipairs(SM.furnaces) do if f.cur == j.id then still = true end end
+        if not still then
+          j.done = true; table.remove(SM.jobs, i)
+          local made = j.total - math.max(0, j.left)
+          if not j.quiet then setStatus("Smelted " .. commas(made) .. " " .. nameOf(j.id) .. (j.outId and (" into " .. nameOf(j.outId)) or ""), LIME) end
+        end
+      end
+    end
+  end
+  function SM.status()
+    if #SM.furnaces == 0 then return nil end
+    local busyN, left = 0, 0
+    for _, f in ipairs(SM.furnaces) do if f.cur then busyN = busyN + 1 end end
+    for _, j in ipairs(SM.jobs) do left = left + j.left end
+    if busyN == 0 and #SM.jobs == 0 then return nil end
+    local j = SM.jobs[1]
+    return "Smelting" .. (j and (" " .. nameOf(j.id)) or "") .. " - " .. busyN .. "/" .. #SM.furnaces .. " furnaces busy" ..
+      (left > 0 and (", " .. commas(left) .. " waiting") or "") .. (SM.noFuel and "  (NO FUEL!)" or "")
+  end
+  -- a crafting-chain step that needs smelting: send what the recipe needs, wait for it
+  function SM.run(st, show)
+    if #SM.furnaces == 0 then return 0, "no furnaces connected" end
+    local plan = craftPlan(st.rc, st.crafts)
+    if plan.short > 0 then return 0, "not enough to smelt" end
+    local mine, total = {}, 0
+    for _, x in ipairs(plan.take) do
+      local j = SM.add(R.id[x.it], x.n, st.rc)
+      if j then mine[#mine + 1] = j; total = total + x.n end
+    end
+    local can = 0
+    for _, f in ipairs(SM.furnaces) do if fits(f, { b = st.rc.b, f = st.rc.f }) then can = can + 1 end end
+    if can == 0 then return 0, (st.rc.b and not st.rc.f) and "needs a blast furnace" or "needs a regular furnace" end
+    local limit = now() + 30 + 11 * math.ceil(total / can)                -- a furnace does one item every 10s
+    while true do
+      local done, left = true, 0
+      for _, j in ipairs(mine) do if not j.done then done = false end; left = left + math.max(0, j.left) end
+      if done then break end
+      if show then show("Smelting " .. commas(total) .. " for " .. nameOf(R.id[st.rc.out]) .. "  (" .. commas(left) .. " waiting)") end
+      if now() > limit then return 0, "smelting took too long (fuel?)" end
+      sleep(1)
+    end
+    sleep(1.5); SM.tick()                                                 -- collect the last ones
+    return total
+  end
+
+  -- input chest: store / smelt / leave for the question
+  function SM.sortInput()
+    if not peripheral.isPresent(CFG.input) then return 0, 0 end
+    local ok, l = pcall(peripheral.call, CFG.input, "list")
+    if not ok or type(l) ~= "table" then return 0, 0 end
+    local moved, stuck = 0, 0
+    SM.asks = {}
+    local smeltN = {}
+    for slot, it in pairs(l) do
+      local dec = SM.decide(it.name, it.count)
+      if dec ~= "ask" then
+        local left = it.count
+        local tried, order = {}, {}
+        local e = byName[it.name]
+        if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
+        for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
+        for _, target in ipairs(order) do
+          if left <= 0 then break end
+          local ok2, n = pcall(peripheral.call, CFG.input, "pushItems", target, slot)
+          if ok2 and type(n) == "number" then left = left - n; moved = moved + n end
+        end
+        if left > 0 then stuck = stuck + left end
+        if dec == "smelt" then smeltN[it.name] = (smeltN[it.name] or 0) + (it.count - left) end
+      end
+    end
+    for id in pairs(SM.once) do if not SM.asks[id] then SM.once[id] = nil end end
+    SM.once = {}
+    if next(smeltN) and SM.rescan then SM.rescan() end
+    for id, n in pairs(smeltN) do SM.add(id, n) end
+    if next(SM.asks) and UI.panel ~= "smelt" and not SM.shown then
+      SM.shown = true; UI.panel = "smelt"
+      if speaker then pcall(speaker.playNote, "pling", 1, 12) end
+    end
+    if not next(SM.asks) then SM.shown = nil end
+    HIST.add(moved)
+    return moved, stuck
+  end
+
+  -- the question on the storage screen
+  function SM.drawPanel()
+    text(RX1, 6, "SMELT THESE?", YELLOW)
+    text(RX1, 7, fit(#SM.furnaces .. " furnaces (" .. (SM.nBlast or 0) .. " blast)", RX2 - RX1 + 1), GRAY)
+    local ids = {}
+    for id in pairs(SM.asks) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local y = 9
+    if #ids == 0 then text(RX1, y, "nothing waiting", LGRAY); y = y + 2 end
+    local bw = math.floor((RX2 - RX1 + 1 - 3) / 4)
+    for _, id in ipairs(ids) do
+      if y > H - 12 then text(RX1, y, "+ more waiting...", GRAY); y = y + 1; break end
+      local rc = SM.info(id)
+      text(RX1, y, fit(commas(SM.asks[id]) .. "x " .. nameOf(id), RX2 - RX1 + 1), WHITE)
+      local outName = rc and R.name[rc.out] or "?"
+      local how = (rc and rc.b) and (rc.f and "furnace or blast" or "blast furnace") or "furnace"
+      text(RX1 + 1, y + 1, fit("\26 " .. outName .. "  (" .. how .. ")", RX2 - RX1), LGRAY)
+      local bx = RX1
+      local function b(label, bg, fg, fn) button("sm" .. label .. id, bx, y + 2, bx + bw - 1, y + 2, label, fg, bg, fn); bx = bx + bw + 1 end
+      b("SMELT", LIME, BLACK, function() SM.once[id] = "smelt"; os.queueEvent("storage_task") end)
+      b("STORE", GRAY, WHITE, function() SM.once[id] = "store"; os.queueEvent("storage_task") end)
+      b("ALWAYS", CYAN, BLACK, function() data.smeltRule[id] = "always"; dirty = true; os.queueEvent("storage_task") end)
+      b("NEVER", RED, WHITE, function() data.smeltRule[id] = "never"; dirty = true; os.queueEvent("storage_task") end)
+      y = y + 4
+    end
+    if #ids > 1 then
+      button("small", RX1, y, RX1 + bw * 2, y, "SMELT ALL", BLACK, LIME, function()
+        for id in pairs(SM.asks) do SM.once[id] = "smelt" end; os.queueEvent("storage_task") end)
+      button("stall", RX1 + bw * 2 + 2, y, RX2, y, "STORE ALL", WHITE, GRAY, function()
+        for id in pairs(SM.asks) do SM.once[id] = "store" end; os.queueEvent("storage_task") end)
+      y = y + 2
+    end
+    -- remembered choices
+    local rules = {}
+    for id, r in pairs(data.smeltRule) do rules[#rules + 1] = { id = id, r = r } end
+    table.sort(rules, function(a, b) return a.id < b.id end)
+    local ry = math.max(y + 1, H - 9)
+    text(RX1, ry, "REMEMBERED (tap X to forget)", YELLOW)
+    ry = ry + 1
+    if #rules == 0 then text(RX1, ry, "none", GRAY) end
+    for _, e in ipairs(rules) do
+      if ry > H - 4 then break end
+      text(RX1, ry, e.r == "always" and "ALWAYS" or "NEVER", e.r == "always" and CYAN or RED)
+      text(RX1 + 7, ry, fit(nameOf(e.id), RX2 - RX1 - 10), WHITE)
+      button("smx" .. e.id, RX2 - 2, ry, RX2, ry, "X", WHITE, RED, function() data.smeltRule[e.id] = nil; dirty = true end)
+      ry = ry + 1
+    end
+    button("smback", RX1, H - 3, RX2, H - 1, string.char(17) .. " BACK", BLACK, YELLOW, function() UI.panel = nil end)
+  end
+end
 
 -- ---------------------------------------------------------- typo-tolerant search
 -- Edit distance that also counts two swapped letters as one mistake ("daimnod" -> "diamond" = 2).
@@ -695,6 +990,7 @@ local function scan()
     else UI.lowAlerted[id] = nil end
   end
 end
+SM.rescan = scan
 
 -- fill in real display names a few at a time (they are remembered between restarts)
 local function resolveNames(limit)
@@ -890,17 +1186,19 @@ end
 -- recipes for an item, the ones closest to craftable first
 local function orderedRecipes(it)
   local l = {}
-  for _, rc in ipairs(R.byOut[it]) do l[#l + 1] = rc end
+  for _, rc in ipairs(R.byOut[it] or {}) do l[#l + 1] = rc end
+  for _, rc in ipairs(SM.recs(it) or {}) do l[#l + 1] = rc end
   table.sort(l, function(a, b) return directShort(a) < directShort(b) end)
   return l
 end
 local function craftCandidates(g, chain)
   local list, score = {}, {}
   for _, it in ipairs(groupItems(g)) do
-    if R.byOut[it] and not chain[it] then
+    if (R.byOut[it] or SM.recs(it)) and not chain[it] then
       list[#list + 1] = it
       local best = math.huge
-      for _, rc in ipairs(R.byOut[it]) do best = math.min(best, directShort(rc)) end
+      for _, rc in ipairs(R.byOut[it] or {}) do best = math.min(best, directShort(rc)) end
+      for _, rc in ipairs(SM.recs(it) or {}) do best = math.min(best, directShort(rc)) end
       score[it] = best
     end
   end
@@ -1032,8 +1330,14 @@ local function chainCraft(t)
   local total = #steps + 1
   for i, st in ipairs(steps) do
     local name = itemName(st.out)
-    local made, err = autoCraft({ rc = st.rc, out = st.out, crafts = st.crafts, name = name,
-      step = "Step " .. i .. "/" .. total .. ": " })
+    local made, err
+    if st.rc.smelt then
+      made, err = SM.run(st, function(m) busy = "Step " .. i .. "/" .. total .. ": " .. m end)
+      scan()
+    else
+      made, err = autoCraft({ rc = st.rc, out = st.out, crafts = st.crafts, name = name,
+        step = "Step " .. i .. "/" .. total .. ": " })
+    end
     if err then return 0, "while making " .. name .. ": " .. err end
     pickupToStorage(R.id[st.out])
   end
@@ -1241,41 +1545,9 @@ local function organize()
   return moves, freed0 - stats.used
 end
 
-local function sortInput()
-  if not peripheral.isPresent(CFG.input) then return 0, 0 end
-  local ok, l = pcall(peripheral.call, CFG.input, "list")
-  if not ok or type(l) ~= "table" then return 0, 0 end
-  local moved, stuck = 0, 0
-  for slot, it in pairs(l) do
-    local left = it.count
-    -- 1) chests that already hold this item, 2) every other chest
-    local tried, order = {}, {}
-    local e = byName[it.name]
-    if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
-    for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
-    for _, target in ipairs(order) do
-      if left <= 0 then break end
-      local ok2, n = pcall(peripheral.call, CFG.input, "pushItems", target, slot)
-      if ok2 and type(n) == "number" then left = left - n; moved = moved + n end
-    end
-    if left > 0 then stuck = stuck + left end
-  end
-  HIST.add(moved)
-  return moved, stuck
-end
+local function sortInput() return SM.sortInput() end
 
 -- ---------------------------------------------------------- drawing
-local hits, flash = {}, {}
-local function hit(id, x1, y1, x2, y2, fn) hits[#hits + 1] = { id = id, x1 = x1, y1 = y1, x2 = x2, y2 = y2, fn = fn } end
-local function button(id, x1, y1, x2, y2, label, fg, bg, fn)
-  if flash[id] and now() - flash[id] < 0.15 then fg, bg = BLACK, WHITE end
-  fill(x1, y1, x2, y2, bg)
-  text(x1 + math.floor((x2 - x1 + 1 - #label) / 2), math.floor((y1 + y2) / 2), label, fg, bg)
-  hit(id, x1, y1, x2, y2, fn)
-end
-
-local LX1, LX2 = 2, 80               -- item list area
-local RX1, RX2 = 83, 121             -- right panel
 local function layout()
   RX2 = W; RX1 = W - 38
   LX2 = RX1 - 3
@@ -1794,6 +2066,7 @@ local function draw()
   elseif UI.mode == "items" and UI.selected then drawDetail()
   else
     if UI.panel == "remotes" then drawRemotes()
+    elseif UI.panel == "smelt" then SM.drawPanel()
     else
       local y = drawKeyboard(6)
       drawAlerts(y + 1)
@@ -1815,6 +2088,13 @@ local function draw()
         end
       end
       button("remotes", RX2 - 11, by, RX2, H - 1, "REMOTES", WHITE, PURPLE, function() UI.panel = "remotes" end)
+      if #SM.furnaces > 0 then
+        local waiting = 0
+        for _ in pairs(SM.asks) do waiting = waiting + 1 end
+        button("smelter", RX2 - 11, by - 2, RX2, by - 2, waiting > 0 and ("SMELT? " .. waiting) or "SMELTER", BLACK, waiting > 0 and YELLOW or ORANGE, function() UI.panel = "smelt" end)
+        local st = SM.status()
+        if st then text(RX1, by - 2, fit(st, RX2 - RX1 - 12), ORANGE) end
+      end
     end
   end
   present()
@@ -2070,7 +2350,7 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
+    busy = function() return busy end, SM = SM, queue = queue, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
 math.randomseed(os.epoch("utc") + os.getComputerID() * 7919)
@@ -2092,11 +2372,21 @@ local function statusLoop()
       while #low > 6 do table.remove(low) end
       pcall(rednet.broadcast, { type = "status", used = stats.used, slots = stats.slots, total = stats.total,
         types = stats.types, msg = status.msg, busy = busy, low = low, crafter = CRAFTER.id ~= nil,
-        owners = owners(), at = os.epoch("utc"), today = HIST.today, yesterday = HIST.yesterday, graph = HIST.graph() }, "storagestat")
+        owners = owners(), at = os.epoch("utc"), smelt = SM.status(), today = HIST.today, yesterday = HIST.yesterday, graph = HIST.graph() }, "storagestat")
     end
   end
 end
-parallel.waitForAny(ui, worker, netServer, function()
+local function smeltLoop()
+  SM.find()
+  local lastFind = now()
+  while true do
+    local id = os.startTimer(2)
+    repeat local ev, p = os.pullEvent() until (ev == "timer" and p == id) or ev == "smelt_tick"
+    if now() - lastFind > 30 then lastFind = now(); SM.find() end
+    SM.tick()
+  end
+end
+parallel.waitForAny(ui, worker, netServer, smeltLoop, function()
   loadRecipes(); rebuildList()
   findCrafter(true)
   statusLoop()

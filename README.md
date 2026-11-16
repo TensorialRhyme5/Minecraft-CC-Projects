@@ -77,3 +77,16 @@ reboot
   low stock, storage at 90% and server lag. Each can be turned on or off on the ALERTS page.
   (No sound: the ender modem takes the pocket's only upgrade slot.)
 - The storage keeps a week of history (`storage_history.txt`) and counts the items put away each day (Mountain Time).
+
+## Smelter (furnaces + blast furnaces)
+
+Connect any number of **Furnaces** and **Blast Furnaces** to the storage's wired network (a wired modem on each,
+right-click it so it turns red). They're never used as storage.
+
+- When something that can be smelted lands in the input chest, it **waits there** and the storage screen asks:
+  **SMELT**, **STORE**, **ALWAYS** (smelt this item from now on) or **NEVER**. Remembered choices are listed at the bottom
+  of the SMELTER panel (tap X to forget one).
+- Blast furnaces are used for things that can go in one (ores, raw metals); regular furnaces take everything else.
+- Fuel comes from storage automatically: charcoal, coal, coal blocks, blaze rods, dried kelp blocks.
+- **Crafting uses it too:** if a recipe needs something that has to be smelted first (stone for stone bricks, glass for
+  panes...), the ingredient shows green and CRAFT smelts it as one of the steps.
