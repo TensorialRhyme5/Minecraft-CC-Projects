@@ -1019,13 +1019,27 @@ end
 -- The chest is any inventory this computer can see on the network; slots are numbered from 1.
 -- Your inventory as the manager sees it: 1-9 hotbar, 10-36 main, 37-40 armor, 41 offhand.
 local IMS = {}                 -- every Inventory Manager: { name, owner }
+-- who each manager belongs to, by its number (inventory_manager_0 = 0). Used when the
+-- game hands back an account ID (98d1e7ad-...) instead of the player's name.
+local IM_NAMES = { [0] = "TensorialRhyme5", [2] = "Haydog098" }
+local function isUUID(s) return type(s) == "string" and s:match("^%x+%-%x+%-%x+%-%x+%-%x+$") ~= nil end
 local function findIM()
   local list = {}
   for _, n in ipairs(peripheral.getNames()) do
     local t = (peripheral.getType(n) or ""):lower()
     if t:find("inventory") and t:find("manager") then
       local ok, o = pcall(peripheral.call, n, "getOwner")
-      list[#list + 1] = { name = n, owner = (ok and type(o) == "string") and o or nil }
+      local owner = (ok and type(o) == "string") and o or nil
+      local num = tonumber(n:match("(%d+)$"))
+      local nice = num and IM_NAMES[num]
+      if owner and nice and (isUUID(owner) or owner:lower() == nice:lower()) then
+        if isUUID(owner) then
+          -- pocket remotes paired while the ID was showing: move them to the name
+          for _, r in pairs(data.remotes) do if r.player == owner then r.player = nice; dirty = true end end
+        end
+        owner = nice
+      end
+      list[#list + 1] = { name = n, owner = owner }
     end
   end
   table.sort(list, function(a, b) return a.name < b.name end)
