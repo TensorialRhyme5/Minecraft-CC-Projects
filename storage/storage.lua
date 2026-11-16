@@ -1504,6 +1504,12 @@ local function drawDetail()
 end
 
 local drawRemotes
+-- names for the paired pocket remotes (by pocket computer ID)
+local REMOTE_NAMES = { [5] = "TensorialRhyme5", [6] = "Haydog098" }
+local function remoteName(id)
+  local n = REMOTE_NAMES[tonumber(id)]
+  return n and (n .. " (#" .. id .. ")") or ("#" .. id)
+end
 -- paired pocket remotes + pairing a new one
 local PAIR = { code = nil, until_ = 0, player = nil }
 local CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   -- no 0/O or 1/I mix-ups
@@ -1523,10 +1529,12 @@ drawRemotes = function()
   for _, id in ipairs(ids) do
     if y > 17 then break end
     local r = data.remotes[id]
-    text(RX1, y, "#" .. id, CYAN)
-    text(RX1 + 7, y, fit(r.player or "anyone", 18), WHITE)
+    local nm = REMOTE_NAMES[tonumber(id)]
+    text(RX1, y, fit(nm or ("#" .. id), 16), CYAN)
+    text(RX1 + 17, y, "#" .. id, GRAY)
+    text(RX1 + 1, y + 1, fit("for " .. (r.player or "anyone"), 26), LGRAY)
     button("rm" .. id, RX2 - 9, y, RX2, y, "REMOVE", WHITE, RED, function()
-      data.remotes[id] = nil; save(); setStatus("Removed pocket remote #" .. id, YELLOW)
+      data.remotes[id] = nil; save(); setStatus("Removed pocket remote " .. remoteName(id), YELLOW)
     end)
     y = y + 2
   end
@@ -1782,7 +1790,7 @@ local function netServer()
            and msg.proof == sha256(PAIR.code .. "|pair|" .. dev .. "|" .. tostring(msg.nonce)) then
           data.remotes[dev] = { key = sha256(PAIR.code .. "|key|" .. dev), player = PAIR.player, ctr = 0 }
           save()
-          setStatus("Paired pocket remote #" .. dev .. (PAIR.player and (" for " .. PAIR.player) or ""), LIME)
+          setStatus("Paired pocket remote " .. remoteName(dev) .. (PAIR.player and (" for " .. PAIR.player) or ""), LIME)
           PAIR.code = nil
           rednet.send(from, { type = "paired", ok = true, player = data.remotes[dev].player, dev = dev }, NET_PROTO)
         else

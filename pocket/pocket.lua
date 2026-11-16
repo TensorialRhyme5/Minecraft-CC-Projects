@@ -9,6 +9,11 @@
 local STORE_PROTO, MUSIC_PROTO = "storagenet", "spacejukebox"
 local MUSIC_REPO = "https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-Music/main/"
 
+-- name this pocket (shows on the item and in the storage's REMOTES list)
+local MY_NAMES = { [5] = "TensorialRhyme5", [6] = "Haydog098" }
+local myName = MY_NAMES[os.getComputerID()]
+if myName and os.getComputerLabel() ~= myName then os.setComputerLabel(myName) end
+
 local W, H = term.getSize()
 if not term.isColour() then error("Needs an ADVANCED pocket computer (colour screen).", 0) end
 
