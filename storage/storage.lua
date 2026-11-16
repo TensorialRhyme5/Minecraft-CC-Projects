@@ -116,7 +116,24 @@ local byName = {}            -- item id -> every variant together (what recipes 
 local items = {}             -- sorted list for display
 local stats = { slots = 0, used = 0, total = 0, types = 0, scanned = 0 }
 local status = { msg = "Scanning storage...", col = LGRAY, at = 0 }
-local function setStatus(msg, col) status.msg, status.col, status.at = msg, col or LGRAY, now() end
+-- crafting / smelting results also go on this computer's own screen and into craft_log.txt (last 40),
+-- so a message that flashed past on the monitor can still be read afterwards
+local function logResult(msg)
+  if not (msg:find("^Crafted") or msg:find("^Made ") or msg:find("^Couldn't") or msg:find("^Smelted")) then return end
+  local line = "[day " .. os.day() .. " " .. textutils.formatTime(os.time(), false) .. "] " .. msg
+  local old = {}
+  if fs.exists("craft_log.txt") then
+    local f = fs.open("craft_log.txt", "r"); local all = f.readAll() or ""; f.close()
+    for l in all:gmatch("[^\n]+") do old[#old + 1] = l end
+  end
+  old[#old + 1] = line
+  while #old > 40 do table.remove(old, 1) end
+  local f = fs.open("craft_log.txt", "w"); f.write(table.concat(old, "\n") .. "\n"); f.close()
+  if term.isColour() then term.setTextColour(msg:find("^Couldn't") and colors.red or (msg:find("^Made ") and colors.yellow or colors.lime)) end
+  print(line)
+  term.setTextColour(colors.white)
+end
+local function setStatus(msg, col) status.msg, status.col, status.at = msg, col or LGRAY, now(); pcall(logResult, msg) end
 
 -- ---------------------------------------------------------- history: a snapshot every 10 min + items put away per day
 local HIST
