@@ -461,7 +461,7 @@ local RX1, RX2 = 83, 121             -- right panel
 local SM
 do
   SM = { furnaces = {}, jobs = {}, asks = {}, once = {}, built = nil, noFuel = false }
-  local FUELS = { "minecraft:charcoal", "minecraft:coal", "minecraft:coal_block", "minecraft:blaze_rod", "minecraft:dried_kelp_block" }
+  local FUELS = { "minecraft:charcoal", "minecraft:coal" }        -- the only fuels the smelter will use
   -- ticks per item (a vanilla furnace is 200 = 10 s). Iron Furnaces tiers use the mod's default speeds.
   local TICKS = { iron = 160, gold = 120, diamond = 80, emerald = 40, obsidian = 20, crystal = 40, netherite = 5,
     copper = 180, silver = 140, rainbow = 20, allthemodium = 5, vibranium = 3, unobtainium = 1 }
@@ -604,7 +604,9 @@ do
         if f.cur then                                                     -- keep it fuelled while it has work
           local fu = l[2]
           if not fu or fu.count < 8 then
-            local fid = fu and fu.name or pickFuel(f.cur)
+            local fid
+            if not fu then fid = pickFuel(f.cur)
+            elseif fu.name == "minecraft:coal" or fu.name == "minecraft:charcoal" then fid = fu.name end   -- anything else there is left alone
             if fid then pullInto(f.name, 2, fid, 16 - (fu and fu.count or 0)) elseif not fu then SM.noFuel = true end
           end
         end

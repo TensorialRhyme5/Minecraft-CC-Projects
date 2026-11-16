@@ -89,6 +89,7 @@ right-click it so it turns red). They're never used as storage.
 - Blast furnaces are used for things that can go in one (ores, raw metals); regular furnaces take everything else.
 - **Iron Furnaces** (any tier) work too and get a bigger share of each batch the faster they are. One with a
   **Blasting augment** counts as a blast furnace; one with a **Smoking augment** is left alone (food only).
-- Fuel comes from storage automatically: charcoal, coal, coal blocks, blaze rods, dried kelp blocks.
+- Fuel comes from storage automatically, **coal or charcoal only** (charcoal first). Anything else in a fuel slot
+  (like an Iron Furnaces Heater) is left alone.
 - **Crafting uses it too:** if a recipe needs something that has to be smelted first (stone for stone bricks, glass for
   panes...), the ingredient shows green and CRAFT smelts it as one of the steps.
