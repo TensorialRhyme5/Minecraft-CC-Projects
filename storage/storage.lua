@@ -462,12 +462,25 @@ local SM
 do
   SM = { furnaces = {}, jobs = {}, asks = {}, once = {}, built = nil, noFuel = false }
   local FUELS = { "minecraft:charcoal", "minecraft:coal", "minecraft:coal_block", "minecraft:blaze_rod", "minecraft:dried_kelp_block" }
+  -- ticks per item (a vanilla furnace is 200 = 10 s). Iron Furnaces tiers use the mod's default speeds.
+  local TICKS = { iron = 160, gold = 120, diamond = 80, emerald = 40, obsidian = 20, crystal = 40, netherite = 5,
+    copper = 180, silver = 140, rainbow = 20, allthemodium = 5, vibranium = 3, unobtainium = 1 }
   function SM.find()
     local list, nb = {}, 0
     for _, n in ipairs(peripheral.getNames()) do
-      if n:find("^minecraft:blast_furnace") then list[#list + 1] = { name = n, blast = true }; nb = nb + 1
-      elseif n:find("^minecraft:furnace") then list[#list + 1] = { name = n, blast = false } end
+      local tier = n:match("^ironfurnaces:([%a]+)_furnace")
+      if n:find("^minecraft:blast_furnace") then list[#list + 1] = { name = n, blast = true, ips = 20 / 100 }
+      elseif n:find("^minecraft:furnace") then list[#list + 1] = { name = n, blast = false, ips = 20 / 200 }
+      elseif tier and TICKS[tier] then
+        -- an Iron Furnace: a Blasting augment makes it a blast furnace, a Smoking augment means food only (skipped)
+        local ok, aug = pcall(peripheral.call, n, "getItemDetail", 4)
+        local a = ok and type(aug) == "table" and aug.name or ""
+        if not a:find("smoking") then
+          list[#list + 1] = { name = n, blast = a:find("blasting") ~= nil, ips = 20 / TICKS[tier], tier = tier }
+        end
+      end
     end
+    for _, f in ipairs(list) do if f.blast then nb = nb + 1 end end
     table.sort(list, function(a, b) return a.name < b.name end)
     for _, f in ipairs(list) do for _, old in ipairs(SM.furnaces) do if old.name == f.name then f.cur = old.cur end end end
     SM.furnaces, SM.nBlast, SM.nFurn = list, nb, #list - nb
@@ -578,9 +591,10 @@ do
         end
         if job then
           local room = 64 - (inp and inp.count or 0)
-          local cap = 0
-          for _, f2 in ipairs(SM.furnaces) do if fits(f2, job) then cap = cap + 1 end end
-          local share = math.max(1, math.ceil(job.total / math.max(1, cap)))   -- split the batch over the furnaces
+          local capR = 0
+          for _, f2 in ipairs(SM.furnaces) do if fits(f2, job) then capR = capR + (f2.ips or 0.1) end end
+          -- split the batch over the furnaces; faster ones get a bigger share
+          local share = math.max(1, math.ceil(job.total * (f.ips or 0.1) / math.max(0.001, capR)))
           local want = math.min(room, job.left, math.max(0, share - (inp and inp.count or 0)))
           local n = want > 0 and pullInto(f.name, 1, job.id, want) or 0
           job.left = job.left - n
@@ -613,7 +627,7 @@ do
   local function rate(rc)
     local r = 0
     for _, f in ipairs(SM.furnaces) do
-      if f.blast and rc.b then r = r + 0.2 elseif not f.blast and rc.f then r = r + 0.1 end
+      if (f.blast and rc.b) or ((not f.blast) and rc.f) then r = r + (f.ips or 0.1) end
     end
     return r
   end
