@@ -117,6 +117,84 @@ local stats = { slots = 0, used = 0, total = 0, types = 0, scanned = 0 }
 local status = { msg = "Scanning storage...", col = LGRAY, at = 0 }
 local function setStatus(msg, col) status.msg, status.col, status.at = msg, col or LGRAY, now() end
 
+-- ---------------------------------------------------------- history: a snapshot every 10 min + items put away per day
+local HIST
+do
+  local FILE, KEEP, EVERY = "storage_history.txt", 1008, 600     -- one week of 10-minute snapshots
+  HIST = { samples = {}, day = "", today = 0, yesterday = 0, last = 0, dirty = false }
+  if fs.exists(FILE) then
+    local f = fs.open(FILE, "r"); local ok, d = pcall(textutils.unserialize, f.readAll()); f.close()
+    if ok and type(d) == "table" then
+      HIST.samples = type(d.samples) == "table" and d.samples or {}
+      HIST.day, HIST.today, HIST.yesterday = tostring(d.day or ""), tonumber(d.today) or 0, tonumber(d.yesterday) or 0
+      local n = #HIST.samples
+      HIST.last = n > 0 and HIST.samples[n].t or 0
+    end
+  end
+  -- today's date in Mountain Time (US daylight-saving rules)
+  local function civil(z)
+    z = z + 719468
+    local era = math.floor(z / 146097); local doe = z - era * 146097
+    local yoe = math.floor((doe - math.floor(doe / 1460) + math.floor(doe / 36524) - math.floor(doe / 146096)) / 365)
+    local doy = doe - (365 * yoe + math.floor(yoe / 4) - math.floor(yoe / 100))
+    local mp = math.floor((5 * doy + 2) / 153)
+    local d = doy - math.floor((153 * mp + 2) / 5) + 1
+    local m = mp < 10 and mp + 3 or mp - 9
+    return yoe + era * 400 + (m <= 2 and 1 or 0), m, d
+  end
+  local function sundayOnOrAfter(y, m, d)                 -- day number of the first Sunday on/after y-m-d
+    local yy = m <= 2 and y - 1 or y
+    local era = math.floor(yy / 400); local yoe = yy - era * 400
+    local mp = m > 2 and m - 3 or m + 9
+    local doy = math.floor((153 * mp + 2) / 5) + d - 1
+    local days = era * 146097 + yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy - 719468
+    return days + (7 - (days + 4) % 7) % 7
+  end
+  function HIST.date()
+    local utc = math.floor(os.epoch("utc") / 1000)
+    local y = civil(math.floor(utc / 86400))
+    local dst = utc >= sundayOnOrAfter(y, 3, 8) * 86400 + 9 * 3600 and utc < sundayOnOrAfter(y, 11, 1) * 86400 + 8 * 3600
+    local yy, mm, dd = civil(math.floor((utc + (dst and -6 or -7) * 3600) / 86400))
+    return string.format("%04d-%02d-%02d", yy, mm, dd)
+  end
+  local function roll()
+    local d = HIST.date()
+    if d ~= HIST.day then
+      HIST.yesterday = (HIST.day ~= "") and HIST.today or 0
+      HIST.day, HIST.today, HIST.dirty = d, 0, true
+    end
+  end
+  function HIST.add(n)                                     -- items put into storage
+    if (n or 0) <= 0 then return end
+    roll(); HIST.today = HIST.today + n; HIST.dirty = true
+  end
+  function HIST.tick(st)                                   -- called every few seconds
+    roll()
+    local t = math.floor(os.epoch("utc") / 1000)
+    if st.scanned and st.scanned > 0 and t - HIST.last >= EVERY then
+      HIST.last = t
+      HIST.samples[#HIST.samples + 1] = { t = t, n = st.total, u = st.used }
+      while #HIST.samples > KEEP do table.remove(HIST.samples, 1) end
+      HIST.dirty = true
+    end
+    if HIST.dirty then
+      HIST.dirty = false
+      local f = fs.open(FILE, "w")
+      f.write(textutils.serialize({ samples = HIST.samples, day = HIST.day, today = HIST.today, yesterday = HIST.yesterday }))
+      f.close()
+    end
+  end
+  function HIST.graph()                                    -- item totals, one per hour, last 24 hours (oldest first)
+    local out, n = {}, #HIST.samples
+    local cutoff = math.floor(os.epoch("utc") / 1000) - 24 * 3600
+    local i = n
+    while i >= 1 and #out < 24 and HIST.samples[i].t >= cutoff do
+      table.insert(out, 1, HIST.samples[i].n); i = i - 6
+    end
+    return out
+  end
+end
+
 -- the pickup spot can hold a barrel OR a Sophisticated Backpack; neither is ever used as storage
 local function isPickupName(name)
   return name == CFG.pickup or name:find("^minecraft:barrel") ~= nil or name:find("^sophisticatedbackpacks:") ~= nil
@@ -1114,6 +1192,7 @@ local function dumpPlayer(player)
     end
   end
   if moved == 0 and lastErr then return 0, lastErr end
+  HIST.add(moved)
   return moved
 end
 
@@ -1181,6 +1260,7 @@ local function sortInput()
     end
     if left > 0 then stuck = stuck + left end
   end
+  HIST.add(moved)
   return moved, stuck
 end
 
@@ -2000,6 +2080,7 @@ local function statusLoop()
   local lastCrafterCheck = now()
   while true do
     sleep(5)
+    HIST.tick(stats)
     if openNet() then
       if now() - lastCrafterCheck > 60 then lastCrafterCheck = now(); findCrafter(true) end
       local low = {}
@@ -2011,7 +2092,7 @@ local function statusLoop()
       while #low > 6 do table.remove(low) end
       pcall(rednet.broadcast, { type = "status", used = stats.used, slots = stats.slots, total = stats.total,
         types = stats.types, msg = status.msg, busy = busy, low = low, crafter = CRAFTER.id ~= nil,
-        owners = owners(), at = os.epoch("utc") }, "storagestat")
+        owners = owners(), at = os.epoch("utc"), today = HIST.today, yesterday = HIST.yesterday, graph = HIST.graph() }, "storagestat")
     end
   end
 end

@@ -169,7 +169,57 @@ local function search()
   UI.searchAt = 0; S.lastQ = UI.q
   storageSend({ type = "search", q = UI.q, off = (UI.page - 1) * ROWS, lim = ROWS })
 end
+-- ---------------------------------------------------------- pairing with the jukebox (music commands are signed)
+local MSEC
+do
+  local FILE, ABC = "jukebox_pairing.txt", "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+  MSEC = { key = nil, code = "", note = nil, lastCtr = 0, pending = nil }
+  if fs.exists(FILE) then
+    local f = fs.open(FILE, "r"); local ok, d = pcall(textutils.unserialize, f.readAll()); f.close()
+    if ok and type(d) == "table" and type(d.key) == "string" then MSEC.key = d.key end
+  end
+  local function canon(m)
+    local o = type(m.order) == "table" and table.concat(m.order, ",") or ""
+    return table.concat({ tostring(m.cmd), tostring(m.pl or ""), tostring(m.si or ""), tostring(m.idx or ""), tostring(m.sec or ""),
+      tostring(m.by or ""), tostring(m.vol or ""), o }, "|")
+  end
+  function MSEC.sign(m)
+    if not MSEC.key or m.cmd == "pair" then return m end
+    local c = os.epoch("utc"); if c <= MSEC.lastCtr then c = MSEC.lastCtr + 1 end; MSEC.lastCtr = c
+    m.dev, m.ctr = os.getComputerID(), c
+    m.mac = sha256(MSEC.key .. "|" .. c .. "|" .. canon(m))
+    return m
+  end
+  function MSEC.pairMsg()
+    local dev, nonce = os.getComputerID(), tostring(math.random(1, 2 ^ 30)) .. tostring(os.epoch("utc"))
+    MSEC.pending, MSEC.note = MSEC.code, "Pairing..."
+    return { cmd = "pair", dev = dev, nonce = nonce, kind = "pocket", label = os.getComputerLabel(),
+      proof = sha256(MSEC.code .. "|jpair|" .. dev .. "|" .. nonce) }
+  end
+  function MSEC.onReply(m)
+    if m.type ~= "jpaired" and m.type ~= "jdenied" then return false end
+    if tonumber(m.dev) ~= os.getComputerID() then return true end
+    if m.type == "jpaired" then
+      if m.ok and MSEC.pending then
+        MSEC.key = sha256(MSEC.pending .. "|jkey|" .. os.getComputerID())
+        local f = fs.open(FILE, "w"); f.write(textutils.serialize({ key = MSEC.key })); f.close()
+        MSEC.code, MSEC.note = "", nil
+      else MSEC.note = "Failed: " .. tostring(m.why or "?") end
+      MSEC.pending = nil
+    elseif m.why == "not paired" then
+      MSEC.key = nil; if fs.exists(FILE) then fs.delete(FILE) end
+      MSEC.note = "Removed - pair again"
+    else MSEC.note = "Refused: " .. tostring(m.why) end
+    return true
+  end
+  function MSEC.typeChar(ch)
+    ch = tostring(ch):upper()
+    if #MSEC.code < 8 and ABC:find(ch, 1, true) then MSEC.code = MSEC.code .. ch end
+  end
+end
+
 local function musicSend(msg)
+  MSEC.sign(msg)
   if M.id then rednet.send(M.id, msg, MUSIC_PROTO) else rednet.broadcast(msg, MUSIC_PROTO) end
 end
 local function musicOnline() return M.st ~= nil and now() - M.at < 4 end
@@ -279,8 +329,74 @@ local function shuffled(n)
   for i = n, 2, -1 do local j = math.random(1, i); t[i], t[j] = t[j], t[i] end
   return t
 end
+local function drawMusicPair()
+  center(3, "PAIR WITH JUKEBOX", C.accent)
+  text(2, 5, "On the jukebox screen:", C.dim)
+  text(2, 6, "CONTROL > PAIRING >", C.text)
+  text(2, 7, "NEW PAIRING CODE", C.text)
+  text(2, 9, "then type the code here:", C.dim)
+  fill(4, 11, W - 3, 13, C.panel)
+  local c = MSEC.code
+  center(12, c:sub(1, 4) .. (#c > 4 and ("-" .. c:sub(5)) or "") .. (#c < 8 and "_" or ""), C.accent, C.panel)
+  button("mpairgo", 4, 15, W - 3, 17, "PAIR", C.bg, #c == 8 and C.good or C.panel, function()
+    if #MSEC.code == 8 then musicSend(MSEC.pairMsg()) end
+  end)
+  if MSEC.note then center(19, fit(MSEC.note, W), MSEC.note:find("ail") and C.bad or C.dim) end
+end
+-- every song in every playlist that matches the search words (each song once)
+local function songMatches(q)
+  local out, seen = {}, {}
+  local words = {}
+  for w in q:lower():gmatch("%S+") do words[#words + 1] = w end
+  for p, pl in ipairs(M.lists or {}) do
+    for si, sg in ipairs(pl.songs or {}) do
+      local key = sg.file or (tostring(sg.title) .. tostring(sg.artist))
+      if not seen[key] then
+        local hay = (tostring(sg.title or "") .. " " .. tostring(sg.artist or "")):lower()
+        local ok = true
+        for _, w in ipairs(words) do if not hay:find(w, 1, true) then ok = false; break end end
+        if ok then seen[key] = true; out[#out + 1] = { pl = p, si = si, title = sg.title or "?", artist = sg.artist or "" } end
+      end
+    end
+  end
+  return out
+end
+local function drawSearch(t)
+  text(1, 3, "SEARCH SONGS", C.accent)
+  button("msback", W - 5, 3, W, 3, "BACK", C.bg, C.accent, function() UI.mview = nil end)
+  fill(1, 5, W, 5, C.panel)
+  local q = UI.mq or ""
+  text(2, 5, "> " .. q:sub(-(W - 4)) .. "_", C.text, C.panel)
+  if not M.lists then center(9, "loading the song list...", C.dim); return end
+  local res = songMatches(q)
+  local rows = 5                                       -- each song takes two lines: title, then artist
+  local pages = math.max(1, math.ceil(#res / rows))
+  UI.mpage = math.max(1, math.min(UI.mpage or 1, pages))
+  for r = 1, rows do
+    local e = res[(UI.mpage - 1) * rows + r]
+    if not e then break end
+    local y = 7 + (r - 1) * 2
+    local bg = r % 2 == 1 and C.panel or colors.black
+    button("song" .. r, 1, y, W, y + 1, "", C.text, bg, function()
+      musicSend({ cmd = "request", pl = e.pl, si = e.si })
+      UI.mnote, UI.mnoteAt = "Queued: " .. e.title, t
+    end)
+    text(2, y, fit(e.title, W - 2), C.text, bg)
+    text(2, y + 1, fit(e.artist, W - 2), C.dim, bg)
+  end
+  if #res == 0 then center(9, q == "" and "type a song or artist" or "no songs match", C.dim) end
+  local y = 7 + rows * 2 + 1
+  button("msprev", 1, y, 4, y, "<", C.text, C.panel, function() UI.mpage = UI.mpage - 1 end)
+  local pg = UI.mpage .. "/" .. pages .. " (" .. #res .. ")"
+  center(y, pg, C.dim)
+  button("msnext", W - 3, y, W, y, ">", C.text, C.panel, function() UI.mpage = UI.mpage + 1 end)
+  if UI.mnote and t - (UI.mnoteAt or 0) < 3 then center(H, fit(UI.mnote, W), C.good) end
+end
+
 local function drawMusic(t)
   local st = M.st or {}
+  if not MSEC.key then drawMusicPair(); return end
+  if UI.mview == "search" then drawSearch(t); return end
   if not musicOnline() then
     center(6, "Looking for the jukebox...", C.dim)
     center(8, netOn and "(out of range?)" or "No modem!", netOn and C.dim or C.bad)
@@ -322,6 +438,7 @@ local function drawMusic(t)
     button("vup", vx2 + 2, 14, vx2 + 3, 14, "+", C.text, C.panel, function() if vol then musicSend({ cmd = "volume", vol = vol + 0.1 }) end end)
     local pct = vol and (math.floor(vol * 100 + 0.5) .. "%") or ""
     text(W - #pct + 1, 15, pct, C.dim)
+    button("msearch", 2, 15, 12, 15, "SEARCH", C.bg, C.light, function() UI.mview = "search"; UI.mq = ""; UI.mpage = 1 end)
     -- playlists (tap = shuffle-play)
     local names = st.names or {}
     local half = math.floor((W - 1) / 2)
@@ -352,6 +469,72 @@ local function wxShort(code, day)
   if code >= 95 then return "Storm", C.accent end
   return "--", C.dim
 end
+-- ---------------------------------------------------------- alerts (banner along the bottom; the modem uses the only upgrade slot, so no sound)
+local ALERT
+do
+  local FILE = "pocket_alerts.txt"
+  ALERT = { on = { join = true, low = true, full = true, tps = true }, queue = {}, log = {}, prev = nil, showUntil = 0 }
+  if fs.exists(FILE) then
+    local f = fs.open(FILE, "r"); local ok, d = pcall(textutils.unserialize, f.readAll()); f.close()
+    if ok and type(d) == "table" then for k in pairs(ALERT.on) do if type(d[k]) == "boolean" then ALERT.on[k] = d[k] end end end
+  end
+  ALERT.list = {
+    { "join", "Players join / leave" }, { "low", "Low stock" }, { "full", "Storage 90% full" }, { "tps", "Server lag (TPS)" },
+  }
+  function ALERT.toggle(k)
+    ALERT.on[k] = not ALERT.on[k]
+    local f = fs.open(FILE, "w"); f.write(textutils.serialize(ALERT.on)); f.close()
+  end
+  local function push(kind, msg, col)
+    if not ALERT.on[kind] then return end
+    local mt = (M.panel and M.panel.clock or ""):gsub(" AM", "a"):gsub(" PM", "p")
+    ALERT.queue[#ALERT.queue + 1] = { msg = msg, col = col }
+    table.insert(ALERT.log, 1, { msg = msg, at = mt })
+    while #ALERT.log > 6 do table.remove(ALERT.log) end
+  end
+  -- compare each new CONTROL packet with the one before
+  function ALERT.check(p)
+    local me = os.getComputerLabel()
+    local cur = { players = {}, low = {}, full = false, lag = false }
+    for _, e in ipairs(p.players or {}) do cur.players[e.name] = true end
+    local st = p.storage
+    if st then
+      for _, a in ipairs(st.low or {}) do cur.low[a.name] = a end
+      local pct = (st.slots or 0) > 0 and st.used / st.slots or 0
+      cur.full = pct >= 0.9 or (ALERT.prev and ALERT.prev.full and pct >= 0.88) or false
+      cur.pct = pct
+    end
+    cur.lag = p.tps ~= nil and (p.tps < 15 or (ALERT.prev and ALERT.prev.lag and p.tps < 17)) or false
+    local old = ALERT.prev
+    ALERT.prev = cur
+    if not old then return end                             -- first packet: just remember it
+    if p.players then
+      for n in pairs(cur.players) do if not old.players[n] and n ~= me then push("join", n .. " joined", C.light) end end
+      for n in pairs(old.players) do if not cur.players[n] and n ~= me then push("join", n .. " left", C.dim) end end
+    end
+    if st then
+      for n, a in pairs(cur.low) do if not old.low[n] then push("low", "Low: " .. n .. " " .. a.have .. "/" .. a.limit, C.accent) end end
+      if cur.full and not old.full then push("full", "Storage " .. math.floor(cur.pct * 100 + 0.5) .. "% full!", C.bad) end
+    end
+    if cur.lag and not old.lag then push("tps", string.format("Server lagging: %.1f TPS", p.tps), C.bad) end
+    if old.lag and not cur.lag and p.tps then push("tps", string.format("Lag over: %.1f TPS", p.tps), C.good) end
+  end
+  -- banner on the bottom two rows, one alert at a time for 4 seconds each
+  function ALERT.draw(t)
+    if t >= ALERT.showUntil then
+      ALERT.cur = table.remove(ALERT.queue, 1)
+      if ALERT.cur then ALERT.showUntil = t + 4 end
+    end
+    local a = ALERT.cur
+    if not a or t >= ALERT.showUntil then ALERT.cur = nil; return end
+    local flashOn = math.floor(t * 4) % 2 == 0
+    local bg = flashOn and a.col or C.panel
+    fill(1, H - 1, W, H, bg)
+    text(1, H - 1, "\19 ALERT", flashOn and C.bg or a.col, bg)
+    text(1, H, fit(a.msg, W), flashOn and C.bg or C.text, bg)
+  end
+end
+
 local function drawControl()
   local p = (M.panel and now() - M.panelAt < 20) and M.panel or nil
   if not p then
@@ -365,9 +548,27 @@ local function drawControl()
     local on = page == n
     button(id, x1, H, x2, H, label, on and C.bg or C.dim, on and C.cyan or C.panel, function() UI.cpage = n end)
   end
-  pageBtn("cp1", 1, 13, "WORLD", 1)
-  pageBtn("cp2", 14, W, "BASE", 2)
+  pageBtn("cp1", 1, 8, "WORLD", 1)
+  pageBtn("cp2", 9, 17, "BASE", 2)
+  pageBtn("cp3", 18, W, "ALERTS", 3)
   local y = 3
+  if page == 3 then
+    text(1, y, "ALERTS", C.accent); y = y + 1
+    text(1, y, "tap to turn on / off", C.dim); y = y + 2
+    for _, e in ipairs(ALERT.list) do
+      local k, on = e[1], ALERT.on[e[1]]
+      text(1, y, fit(e[2], W - 6), C.text)
+      button("al_" .. k, W - 4, y, W, y, on and "ON" or "OFF", C.bg, on and C.good or C.panel, function() ALERT.toggle(k) end)
+      y = y + 2
+    end
+    text(1, y, "RECENT", C.accent); y = y + 1
+    if #ALERT.log == 0 then text(1, y, "nothing yet", C.dim) end
+    for _, l in ipairs(ALERT.log) do
+      if y > H - 2 then break end
+      text(1, y, fit(l.msg, W - #l.at - 1), C.text); text(W - #l.at + 1, y, l.at, colors.gray); y = y + 1
+    end
+    return
+  end
   if page == 1 then
     text(1, y, "REAL TIME", C.accent); y = y + 1
     text(2, y, p.clock .. " " .. p.tz, C.text); y = y + 1
@@ -435,6 +636,7 @@ local function drawControl()
       for i = 1, bw do setCell(1 + i, y, " ", C.text, i <= f and (pct > 0.9 and C.bad or (pct > 0.75 and C.accent or C.good)) or colors.gray) end
       y = y + 1
       text(2, y, fit(commasN(st.total) .. " items, " .. commasN(st.types) .. " kinds", W - 1), C.dim); y = y + 1
+      if st.today then text(2, y, fit("Today +" .. commasN(st.today) .. " items in", W - 1), C.good); y = y + 1 end
       local low = type(st.low) == "table" and st.low or {}
       if #low > 0 then
         local parts = {}
@@ -464,6 +666,7 @@ local function draw(t)
   tabBtn("tabM", 9, 17, "MUSIC", "music", function() UI.tab = "music" end)
   tabBtn("tabC", 18, W, "CONTROL", "control", function() UI.tab = "control" end)
   if tab == "items" then drawItems() elseif tab == "music" then drawMusic(t) else drawControl() end
+  ALERT.draw(t or now())
   present()
 end
 
@@ -511,8 +714,19 @@ local function main()
         if b >= h.x1 and b <= h.x2 and c >= h.y1 and c <= h.y2 then flash[h.id] = t; h.fn(b, c); break end
       end
       draw(t)
+    elseif ev == "char" and UI.tab == "music" and not MSEC.key then MSEC.typeChar(a); draw(t)
+    elseif ev == "key" and UI.tab == "music" and not MSEC.key then
+      if a == keys.backspace then MSEC.code = MSEC.code:sub(1, -2)
+      elseif a == keys.enter and #MSEC.code == 8 then musicSend(MSEC.pairMsg()) end
+      draw(t)
+    elseif ev == "char" and UI.tab == "music" and UI.mview == "search" then UI.mq = (UI.mq or "") .. a; UI.mpage = 1; draw(t)
+    elseif ev == "key" and UI.tab == "music" and UI.mview == "search" then
+      if a == keys.backspace then UI.mq = (UI.mq or ""):sub(1, -2); UI.mpage = 1 end
+      draw(t)
+    elseif ev == "mouse_scroll" and UI.tab == "music" and UI.mview == "search" then
+      UI.mpage = math.max(1, (UI.mpage or 1) + a); draw(t)
     elseif ev == "mouse_scroll" and UI.tab == "control" then
-      UI.cpage = a > 0 and 2 or 1; draw(t)
+      UI.cpage = math.max(1, math.min(3, (UI.cpage or 1) + a)); draw(t)
     elseif ev == "mouse_scroll" and UI.tab == "items" and not UI.sel then
       UI.page = math.max(1, UI.page + a); search(); draw(t)
     elseif ev == "char" and UI.tab == "items" and not PAIRED then
@@ -556,8 +770,11 @@ local function main()
         end
       elseif c == MUSIC_PROTO and type(msg) == "table" and msg.type == "state" then
         M.st, M.at, M.id = msg, t, a
+      elseif c == MUSIC_PROTO and type(msg) == "table" and MSEC.onReply(msg) then
+        -- pairing reply (handled above)
       elseif c == MUSIC_PROTO and type(msg) == "table" and msg.type == "panel" then
         M.panel, M.panelAt = msg, t
+        ALERT.check(msg)
       end
     end
   end

@@ -69,3 +69,11 @@ code itself is never sent), so other people's ender modems can't use your storag
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/pocket/startup.lua startup.lua
 reboot
 ```
+
+## Pocket extras
+
+- **MUSIC tab:** pair with the jukebox once (CONTROL > PAIRING on the jukebox), then use **SEARCH** to queue any song.
+- **CONTROL tab:** WORLD / BASE / **ALERTS** pages. Alerts flash along the bottom of the screen for players joining or leaving,
+  low stock, storage at 90% and server lag. Each can be turned on or off on the ALERTS page.
+  (No sound: the ender modem takes the pocket's only upgrade slot.)
+- The storage keeps a week of history (`storage_history.txt`) and counts the items put away each day (Mountain Time).
