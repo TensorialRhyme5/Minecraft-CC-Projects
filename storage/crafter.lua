@@ -26,13 +26,59 @@ local function log(...)
   print(table.concat(t, " "))
 end
 
+-- ---------------------------------------------------------- finding the barrel
+-- The turtle can only pull from the block in front, above or below it. If the barrel is beside
+-- or behind it, it turns to face it (turning uses no fuel).
+local PICK = { side = nil }
+local function suck() if PICK.side == "top" then return turtle.suckUp() elseif PICK.side == "bottom" then return turtle.suckDown() end return turtle.suck() end
+local function drop() if PICK.side == "top" then return turtle.dropUp() elseif PICK.side == "bottom" then return turtle.dropDown() end return turtle.drop() end
+
+local function isInv(side)
+  if not peripheral.isPresent(side) then return false end
+  if peripheral.hasType then
+    local ok, has = pcall(peripheral.hasType, side, "inventory")
+    if ok and has then return true end
+  end
+  local ok, m = pcall(peripheral.getMethods, side)
+  if ok and type(m) == "table" then for _, x in ipairs(m) do if x == "pushItems" or x == "list" then return true end end end
+  return false
+end
+local function openModems()
+  local any = false
+  for _, side in ipairs(rs.getSides()) do
+    if peripheral.getType(side) == "modem" then rednet.open(side); any = true end
+  end
+  return any
+end
+local function findPickup()
+  if PICK.side and isInv(PICK.side) then return PICK.side end
+  local function preferred(side)                    -- a barrel/backpack beats any other inventory
+    local t = peripheral.getType(side) or ""
+    return t:find("barrel") or t:find("backpack")
+  end
+  for pass = 1, 2 do
+    for _, side in ipairs({ "front", "top", "bottom" }) do
+      if isInv(side) and (pass == 2 or preferred(side)) then PICK.side = side; return side end
+    end
+  end
+  for _ = 1, 3 do                                   -- barrel is beside or behind: turn to face it
+    turtle.turnRight()
+    if rednet.close then pcall(rednet.close) end
+    openModems()
+    if isInv("front") then PICK.side = "front"; return "front" end
+  end
+  turtle.turnRight(); if rednet.close then pcall(rednet.close) end; openModems()
+  PICK.side = nil
+  return nil
+end
+
 -- put everything back in the barrel
 local function dumpAll()
   local ok = true
   for i = 1, 16 do
     if turtle.getItemCount(i) > 0 then
       turtle.select(i)
-      if not turtle.drop() then ok = false end
+      if not drop() then ok = false end
     end
   end
   turtle.select(1)
@@ -97,7 +143,7 @@ local function gather(cells, k)
     local st = freeStage()
     if not st then return false, "barrel is too cluttered - empty it a bit" end
     turtle.select(st)
-    if not turtle.suck() then return false, "ran out of ingredients in the barrel" end
+    if not suck() then return false, "ran out of ingredients in the barrel (" .. (PICK.side or "?") .. ")" end
   end
   return false, "couldn't find all the ingredients in the barrel"
 end
@@ -105,6 +151,9 @@ end
 local function handleJob(job)
   if type(job) ~= "table" or type(job.cells) ~= "table" or type(job.k) ~= "number" then
     return { type = "done", job = job and job.job, ok = false, err = "bad job" }
+  end
+  if not findPickup() then
+    return { type = "done", job = job.job, ok = false, err = "the turtle can't find the barrel - it must touch the turtle" }
   end
   if not dumpAll() then
     return { type = "done", job = job.job, ok = false, err = "barrel is full" }
@@ -114,7 +163,7 @@ local function handleJob(job)
   local ok, err = gather(cells, job.k)
   -- everything that isn't part of the grid goes back before crafting
   for _, s in ipairs(STAGE) do
-    if turtle.getItemCount(s) > 0 then turtle.select(s); turtle.drop() end
+    if turtle.getItemCount(s) > 0 then turtle.select(s); drop() end
   end
   if not ok then
     dumpAll()
@@ -139,7 +188,7 @@ local function handleJob(job)
       if d then
         if d.name == job.out then made = made + d.count end
         turtle.select(st)
-        if not turtle.drop() then dropped = false end
+        if not drop() then dropped = false end
       end
     end
     if after == 0 then break end
@@ -160,18 +209,20 @@ if _G.__CRAFTER_TEST then return handleJob end
 -- ---------------------------------------------------------- main
 term.clear(); term.setCursorPos(1, 1)
 print("STORAGE CRAFTER")
-local opened = false
-for _, side in ipairs(rs.getSides()) do
-  if peripheral.getType(side) == "modem" then rednet.open(side); opened = true end
-end
+local opened = openModems()
 if not opened then error("No modem touching the turtle. Put a full-block wired modem against it and right-click it.", 0) end
 if not turtle.craft and not peripheral.find("workbench") then
   error("This isn't a crafty turtle - craft it together with a crafting table.", 0)
 end
 rednet.host(PROTO, "crafter_" .. os.getComputerID())
-dumpAll()
+local where = findPickup()
+if where then
+  print("Barrel found: " .. where)
+  dumpAll()
+else
+  print("Can't see the barrel yet - it must touch the turtle.")
+end
 print("Ready. Waiting for the storage computer...")
-print("Barrel goes in FRONT of the turtle.")
 
 while true do
   local from, msg = rednet.receive(PROTO)
