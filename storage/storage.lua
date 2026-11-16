@@ -729,6 +729,42 @@ local function drawSearchBar()
     data.sort == "name" and CYAN or GRAY, function() data.sort = "name"; save(); rebuildList() end)
 end
 
+-- open a recipe; `fromCurrent` remembers where you were so BACK can return there
+local function openRecipe(o, fromCurrent, crafts)
+  if fromCurrent and UI.rsel then
+    UI.rhist = UI.rhist or {}
+    UI.rhist[#UI.rhist + 1] = { o = UI.rsel, rvar = UI.rvar, crafts = UI.crafts, rlist = UI.rlist }
+    if #UI.rhist > 20 then table.remove(UI.rhist, 1) end
+  elseif not fromCurrent then UI.rhist = {} end
+  UI.rsel, UI.rvar, UI.crafts, UI.rlist = o, 1, math.max(1, crafts or 1), rankRecipes(o)
+end
+local function goBack()
+  local h = UI.rhist and table.remove(UI.rhist)
+  if h then UI.rsel, UI.rvar, UI.crafts, UI.rlist = h.o, h.rvar, h.crafts, h.rlist end
+end
+-- which item to look up for an ingredient slot: one that has a recipe, preferring one you
+-- can already make, then the item shown in the slot, then vanilla
+local function ingredientTarget(g, shown)
+  local best, bestScore
+  for _, it in ipairs(groupItems(g)) do
+    if R.byOut[it] then
+      local sc = 0
+      if it == shown then sc = sc + 2 end
+      if (R.id[it] or ""):find("^minecraft:") then sc = sc + 1 end
+      for _, rc in ipairs(R.byOut[it]) do if canCraft(rc, 1) then sc = sc + 4; break end end
+      if not bestScore or sc > bestScore then best, bestScore = it, sc end
+    end
+  end
+  return best
+end
+local function drillInto(g, shown, short)
+  local t = ingredientTarget(g, shown)
+  if not t then setStatus("No crafting-table recipe for " .. (shown and itemName(shown) or groupLabel(g)), RED); return end
+  local first = rankRecipes(t)[1]
+  local crafts = (short and short > 0 and first) and math.ceil(short / first.n) or 1
+  openRecipe(t, true, crafts)
+end
+
 local function drawList()
   local top, bottom = 7, H - 4
   local rows = bottom - top + 1
@@ -767,7 +803,7 @@ local function drawList()
       text(x + 1, y, fit(it.name, colW - #tag - 4), sel and YELLOW or (ready and WHITE or LGRAY), bg)
       text(x + colW - #tag - 1, y, tag, ready and LIME or GRAY, bg)
       hit("rec:" .. o, x, y, x + colW - 1, y, function()
-        if UI.rsel == o then UI.rsel = nil else UI.rsel = o; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(o) end
+        if UI.rsel == o then UI.rsel = nil else openRecipe(o, false) end
       end)
     else
       local col = (i <= rows) and 0 or 1
@@ -896,7 +932,7 @@ local function drawDetail()
   local ri = R.byId[id]
   if R.state == "ready" and ri and R.byOut[ri] then
     button("showrec", RX1, 31, RX2, 33, "SHOW RECIPE", BLACK, PURPLE, function()
-      UI.mode = "recipes"; UI.selected = nil; UI.rsel = ri; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(ri)
+      UI.mode = "recipes"; UI.selected = nil; UI.rhist = {}; UI.rsel = ri; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(ri)
       rebuildList()
     end)
   end
@@ -910,7 +946,11 @@ local function drawRecipe()
   if UI.rvar > #list then UI.rvar = 1 end
   local rc = list[UI.rvar]
   fill(RX1 - 1, 5, RX2, H, PANEL)
-  text(RX1, 6, fit(R.name[o], 38), YELLOW, PANEL)
+  local hasBack = UI.rhist and #UI.rhist > 0
+  text(RX1, 6, fit(R.name[o], hasBack and 30 or 38), YELLOW, PANEL)
+  if hasBack then
+    button("rback", RX2 - 7, 6, RX2, 6, string.char(17) .. " BACK", BLACK, YELLOW, goBack)
+  end
   text(RX1, 7, "makes " .. rc.n .. (rc.k == "l" and "  (shapeless)" or ""), LGRAY, PANEL)
   if #list > 1 then
     local lbl = UI.rvar .. "/" .. #list
@@ -959,6 +999,8 @@ local function drawRecipe()
       local label = one.pick[g] and itemName(one.pick[g]) or groupLabel(g)
       label = label:gsub("^#c:", "#"):gsub("^#minecraft:", "#"):gsub("[/_]", " ")
       cellText(cx, cy, label, WHITE, bg)
+      local shown, short = one.pick[g], plan.missing[g]
+      hit("cell" .. cell, cx, cy, cx + CW - 1, cy + CH - 1, function() drillInto(g, shown, short) end)
     end
   end
   -- arrow + result slot
@@ -970,6 +1012,12 @@ local function drawRecipe()
   cellText(ox, oy, (R.name[o]:gsub(" %(.*%)$", "")), WHITE, PURPLE)
   local mk = "x" .. commas(rc.n)
   text(ox + math.floor((CW - #mk) / 2), oy + CH + 1, mk, YELLOW, PANEL)
+  if one.short > 0 then                            -- hint under the result slot
+    local hx = gx + 3 * CW + 4
+    text(hx, gy + 3 * CH - 2, "tap a red", GRAY, PANEL)
+    text(hx, gy + 3 * CH - 1, "slot to see", GRAY, PANEL)
+    text(hx, gy + 3 * CH, "its recipe", GRAY, PANEL)
+  end
   -- ingredient totals
   local y = 24
   text(RX1, y, "NEED FOR " .. UI.crafts .. " CRAFT" .. (UI.crafts == 1 and "" or "S") .. " (" .. commas(rc.n * UI.crafts) .. " made)", YELLOW, PANEL)
@@ -983,6 +1031,8 @@ local function drawRecipe()
     local nm = plan.pick[g] and itemName(plan.pick[g]) or groupLabel(g)
     local right = commas(need - short) .. "/" .. commas(need)
     text(RX1, y, fit(nm, 38 - #right - 1), short > 0 and WHITE or LGRAY, PANEL)
+    local pk = plan.pick[g]
+    hit("ing" .. k, RX1, y, RX2, y, function() drillInto(g, pk, short) end)
     text(RX2 - #right + 1, y, right, short > 0 and RED or LIME, PANEL)
     y = y + 1
   end
