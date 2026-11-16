@@ -108,7 +108,9 @@ end
 
 -- ---------------------------------------------------------- inventory index
 local storages = {}          -- names of storage inventories
-local index = {}             -- id -> { id, count, locs = { {inv, slot, count} } }
+local index = {}             -- key -> { id, name, count, locs = { {inv, slot, count} } }
+                             -- key is the item id, or "id#variant" for enchanted books, potions, enchanted gear...
+local byName = {}            -- item id -> every variant together (what recipes use)
 local items = {}             -- sorted list for display
 local stats = { slots = 0, used = 0, total = 0, types = 0, scanned = 0 }
 local status = { msg = "Scanning storage...", col = LGRAY, at = 0 }
@@ -258,7 +260,7 @@ local function itemName(i)                        -- recipe item index -> displa
   local id = R.id[i]
   return (id and data.names[id]) or R.name[i] or "?"
 end
-local function stock(i) local e = index[R.id[i] or ""]; return e and e.count or 0 end
+local function stock(i) local e = byName[R.id[i] or ""]; return e and e.count or 0 end
 
 -- slots of a recipe: list of 9 (shaped, 0 = empty) or n (shapeless) group numbers
 local function recipeSlots(rc)
@@ -489,6 +491,39 @@ local function rebuildList(quick)
   end
 end
 
+-- these items always carry data (stored enchantments, potion type) even when list() has no "nbt" hash
+local ALWAYS_VARIES = { ["minecraft:enchanted_book"] = true, ["minecraft:potion"] = true, ["minecraft:splash_potion"] = true,
+  ["minecraft:lingering_potion"] = true, ["minecraft:tipped_arrow"] = true }
+local variantCache = {}
+local ROMAN = { "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X" }
+local function enchList(d)
+  local out = {}
+  for _, e in ipairs(type(d.enchantments) == "table" and d.enchantments or {}) do
+    local nm = e.displayName and clean(e.displayName)
+    if not nm or nm == "" then
+      nm = prettyId(e.name or "?")
+      if e.level and e.level > 1 then nm = nm .. " " .. (ROMAN[e.level] or tostring(e.level)) end
+    end
+    out[#out + 1] = nm
+  end
+  return out
+end
+-- name shown in the list for an item that has enchantments / a potion type
+local function variantLabel(d)
+  local base = clean(d.displayName or prettyId(d.name or "?"))
+  local ench = enchList(d)
+  if #ench == 0 then return base end
+  if d.name == "minecraft:enchanted_book" then return "Book: " .. table.concat(ench, ", ") end
+  return base .. " (" .. table.concat(ench, ", ") .. ")"
+end
+local function variantOf(d)
+  local ench = enchList(d)
+  local sig
+  if #ench > 0 then sig = table.concat(ench, ","):lower():gsub("%s+", "_")
+  else sig = clean(d.displayName or ""):lower():gsub("%s+", "_") end
+  return { sig = sig, label = variantLabel(d) }
+end
+
 local function scan()
   findStorages()
   local lists, sizes = {}, {}
@@ -502,20 +537,58 @@ local function scan()
     end
   end
   if #jobs > 0 then parallel.waitForAll(table.unpack(jobs)) end
-  local newIndex = {}
+  -- items that only differ by enchantments / potion type get their own entry
+  local need = {}
+  for i, name in ipairs(storages) do
+    for slot, it in pairs(lists[i] or {}) do
+      if not it.nbt and ALWAYS_VARIES[it.name] then
+        local ck = name .. ":" .. slot .. ":" .. it.name .. ":" .. it.count
+        if not variantCache[ck] then need[#need + 1] = { inv = name, slot = slot, ck = ck } end
+      end
+    end
+  end
+  if #need > 0 then
+    local fetch = {}
+    for _, x in ipairs(need) do
+      fetch[#fetch + 1] = function()
+        local ok, d = pcall(peripheral.call, x.inv, "getItemDetail", x.slot)
+        variantCache[x.ck] = (ok and type(d) == "table") and variantOf(d) or false
+      end
+    end
+    for k = 1, #fetch, 64 do parallel.waitForAll(table.unpack(fetch, k, math.min(#fetch, k + 63))) end
+  end
+  local newIndex, newByName, seen = {}, {}, {}
   local slots, used, total = 0, 0, 0
   for i, name in ipairs(storages) do
     slots = slots + (sizes[i] or 0)
     for slot, it in pairs(lists[i] or {}) do
       used = used + 1
       total = total + it.count
-      local e = newIndex[it.name]
-      if not e then e = { id = it.name, count = 0, locs = {} }; newIndex[it.name] = e end
+      local key, label = it.name, nil
+      if it.nbt then key = it.name .. "#" .. it.nbt
+      elseif ALWAYS_VARIES[it.name] then
+        local ck = name .. ":" .. slot .. ":" .. it.name .. ":" .. it.count
+        seen[ck] = true
+        local v = variantCache[ck]
+        if v then key, label = it.name .. "#" .. v.sig, v.label end
+      end
+      if label and not data.names[key] then data.names[key] = label; dirty = true end
+      local e = newIndex[key]
+      if not e then e = { id = key, name = it.name, count = 0, locs = {} }; newIndex[key] = e end
       e.count = e.count + it.count
-      e.locs[#e.locs + 1] = { inv = name, slot = slot, count = it.count }
+      local loc = { inv = name, slot = slot, count = it.count, plain = key == it.name }
+      e.locs[#e.locs + 1] = loc
+      local b = newByName[it.name]
+      if not b then b = { id = it.name, name = it.name, count = 0, locs = {} }; newByName[it.name] = b end
+      b.count = b.count + it.count
+      b.locs[#b.locs + 1] = loc
     end
   end
-  index = newIndex
+  for ck in pairs(variantCache) do if not seen[ck] then variantCache[ck] = nil end end
+  for _, b in pairs(newByName) do                    -- plain copies get used first by recipes
+    table.sort(b.locs, function(a, c) if a.plain ~= c.plain then return a.plain end return a.count > c.count end)
+  end
+  index, byName = newIndex, newByName
   R.ready = {}
   local pk = currentPickup()
   pickupFree = nil
@@ -552,9 +625,9 @@ local function resolveNames(limit)
       local l = e.locs[1]
       local ok, d = pcall(peripheral.call, l.inv, "getItemDetail", l.slot)
       if ok and type(d) == "table" and d.displayName then
-        data.names[id] = clean(d.displayName); dirty = true
+        data.names[id] = (id ~= e.name) and variantLabel(d) or clean(d.displayName); dirty = true
       else
-        data.names[id] = prettyId(id); dirty = true
+        data.names[id] = prettyId(e.name or id); dirty = true
       end
       done = done + 1
       if done >= limit then break end
@@ -571,7 +644,7 @@ local busy = nil              -- progress text while organizing / crafting
 local function queue(t) tasks[#tasks + 1] = t; os.queueEvent("storage_task") end
 
 local function retrieve(id, want)
-  local e = index[id]
+  local e = id:find("#", 1, true) and index[id] or byName[id]   -- a plain id means "any copy" (recipes)
   if not e then return 0 end
   local target = currentPickup()
   if not target then return 0, "no barrel or backpack connected" end
@@ -610,7 +683,7 @@ end
 local maxStackCache = {}
 local function maxStack(id)
   if maxStackCache[id] then return maxStackCache[id] end
-  local e = index[id]
+  local e = byName[id]
   local m = 64
   if e and e.locs[1] then
     local ok, d = pcall(peripheral.call, e.locs[1].inv, "getItemDetail", e.locs[1].slot)
@@ -857,7 +930,7 @@ local function pickupToStorage(id)
     if it.name == id then
       local left = it.count
       local order, tried = {}, {}
-      local e = index[id]
+      local e = byName[id]
       if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
       for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
       for _, target in ipairs(order) do
@@ -944,7 +1017,7 @@ local function sortInput()
     local left = it.count
     -- 1) chests that already hold this item, 2) every other chest
     local tried, order = {}, {}
-    local e = index[it.name]
+    local e = byName[it.name]
     if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
     for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
     for _, target in ipairs(order) do
@@ -1197,7 +1270,20 @@ local function drawDetail()
   local name = data.names[id] or prettyId(id)
   fill(RX1 - 1, 5, RX2, H, PANEL)
   text(RX1, 6, fit(name, 38), YELLOW, PANEL)
-  text(RX1, 7, fit(id, 38), GRAY, PANEL)
+  text(RX1, 7, fit(e and e.name or id, 38), GRAY, PANEL)
+  if e and e.name ~= id and e.locs[1] then        -- list the enchantments under the name
+    UI.enchCache = UI.enchCache or {}
+    local ench = UI.enchCache[id]
+    if not ench then
+      local ok, d = pcall(peripheral.call, e.locs[1].inv, "getItemDetail", e.locs[1].slot)
+      ench = (ok and type(d) == "table") and enchList(d) or {}
+      UI.enchCache[id] = ench
+    end
+    if #ench > 0 then
+      local line = table.concat(ench, ", ")
+      text(RX1, 8, fit(line, 38), PURPLE, PANEL)
+    end
+  end
   local have = e and e.count or 0
   text(RX1, 9, "In storage:", LGRAY, PANEL)
   text(RX1 + 12, 9, commas(have), CYAN, PANEL)
@@ -1240,7 +1326,7 @@ local function drawDetail()
       save()
     end)
   end
-  local ri = R.byId[id]
+  local ri = R.byId[e and e.name or id]
   if R.state == "ready" and ri and R.byOut[ri] then
     button("showrec", RX1, 31, RX2, 33, "SHOW RECIPE", BLACK, PURPLE, function()
       UI.mode = "recipes"; UI.selected = nil; UI.rhist = {}; UI.rsel = ri; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(ri)
