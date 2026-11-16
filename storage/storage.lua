@@ -723,7 +723,7 @@ end
 -- ---------------------------------------------------------- crafting missing parts first
 -- Plans a whole chain (logs -> planks -> sticks -> pickaxe) against a "virtual" copy of the
 -- storage counts, so a slot only turns green when everything under it can really be made.
-local CHAIN_DEPTH, CHAIN_BUDGET = 6, 400
+local CHAIN_DEPTH, CHAIN_BUDGET = 8, 2500          -- how deep / how much the search may look
 local BASE = setmetatable({}, { __index = function(_, it) return stock(it) end })
 local function child(vs) return setmetatable({}, { __index = vs }) end
 local function commit(from, to) for k, v in pairs(from) do to[k] = v end end
@@ -758,7 +758,7 @@ local function craftCandidates(g, chain)
     if am ~= bm then return am end
     return a < b
   end)
-  while #list > 6 do table.remove(list) end
+  while #list > 12 do table.remove(list) end
   return list
 end
 
@@ -768,7 +768,7 @@ local function planMake(g, amount, vs, depth, chain, budget)
   if depth >= (budget.max or CHAIN_DEPTH) then return nil end
   for _, it in ipairs(craftCandidates(g, chain)) do
     local recs = orderedRecipes(it)
-    for r = 1, math.min(3, #recs) do
+    for r = 1, math.min(8, #recs) do
       local rc2 = recs[r]
       budget.n = budget.n - 1
       if budget.n < 0 then return nil end
@@ -1531,7 +1531,7 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end, R = R, rebuild = function() rebuildList() end, rankRecipes = rankRecipes, craftPlan = craftPlan }
+    busy = function() return busy end, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
 parallel.waitForAny(ui, worker, function()

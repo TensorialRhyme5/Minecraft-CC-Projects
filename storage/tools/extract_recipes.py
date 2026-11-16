@@ -46,6 +46,41 @@ def modids_of(z):
     return ids
 
 
+# ---- the pack's config files decide some mod-specific recipe conditions
+CFG_DIR = '/mnt/user-data/uploads/config'
+def _read(name):
+    try: return open(os.path.join(CFG_DIR, name), encoding='utf-8', errors='replace').read()
+    except OSError: return ''
+def _toml_bool(txt, key, default):
+    m = re.search(r'^\s*' + re.escape(key) + r'\s*=\s*(true|false)', txt, re.M)
+    return default if not m else m.group(1) == 'true'
+_rel = _read('reliquary-common.toml')
+_ma = _read('mysticalagriculture-common.toml')
+CONF = {
+    'reliquary:mob_drops_craftable': _toml_bool(_rel, 'dropCraftingRecipesEnabled', False),
+    'reliquary:alkahestry_enabled': not _toml_bool(_rel, 'alkahestryTome', False),
+    'reliquary:handgun_enabled': not _toml_bool(_rel, 'handgun', False),
+    'reliquary:potions_enabled': not _toml_bool(_rel, 'potion', False),
+    'reliquary:pedestal_enabled': not _toml_bool(_rel, 'pedestal', False),
+    'reliquary:passive_pedestal_enabled': not _toml_bool(_rel, 'passivePedestal', False),
+    'reliquary:charm_enabled': not _toml_bool(_rel, 'charms', False),
+    'mysticalagriculture:seed_crafting_recipes_enabled': _toml_bool(_ma, 'seedCraftingRecipes', True),
+}
+_soph = {}
+for f in ('sophisticatedcore-common.toml',):
+    for item, flag in re.findall(r'"([a-z0-9_:/]+)\|(true|false)"', _read(f)):
+        _soph[item] = (flag == 'true')
+# Supplementaries: "[blocks.flax] enabled = false" or "sus_recipes = false"
+_supp_off = set()
+cur = None
+for line in _read('supplementaries-common.toml').splitlines():
+    m = re.match(r'\s*\[([^\]]+)\]', line)
+    if m: cur = m.group(1).split('.')[-1]; continue
+    m = re.match(r'\s*([A-Za-z0-9_]+)\s*=\s*false', line)
+    if m:
+        if m.group(1) == 'enabled' and cur: _supp_off.add(cur)
+        else: _supp_off.add(m.group(1))
+
 def cond_ok(c):
     if not isinstance(c, dict):
         return True
@@ -66,6 +101,19 @@ def cond_ok(c):
         return item.split(':')[0] in mods_loaded
     if t == 'tag_empty':
         return False  # assume tags are populated
+    full = c.get('type', '')
+    if full in CONF:
+        return CONF[full]
+    if full == 'sophisticatedcore:item_enabled':
+        return _soph.get(c.get('itemRegistryName'), True)
+    if full in ('supplementaries:flag', 'amendments:flag'):
+        return c.get('flag') not in _supp_off if full == 'supplementaries:flag' else True
+    if full == 'expandedae:not_loaded':
+        return c.get('modid') not in mods_loaded
+    if full == 'dyenamics:lazy':
+        return cond_ok(c.get('value'))
+    if c.get('invert') is True:
+        return False   # an inverted "feature enabled" check: features are on, so this is off
     return True
 
 
