@@ -203,7 +203,11 @@ local function loadRecipes()
   R.id, R.name, R.byId, R.tagName, R.tagRaw, R.grpRaw, R.byOut, R.outs = id, name, byId, tagName, tagRaw, grpRaw, byOut, outs
   R.tagMem, R.grpMem = {}, {}
   R.lower = {}
-  for j, o in ipairs(outs) do R.lower[j] = name[o]:lower() .. "\0" .. id[o] end
+  R.lname, R.lns = {}, {}
+  for j, o in ipairs(outs) do
+    R.lname[j] = name[o]:lower(); R.lower[j] = R.lname[j] .. "\0" .. id[o]
+    R.lns[j] = R.lname[j]:gsub(" %(.*%)$", ""):gsub("%s+", "")
+  end
   R.state, R.msg = "ready", #outs .. " craftable items, " .. i .. " lines"
 end
 
@@ -327,30 +331,150 @@ end
 local UI = { search = "", page = 1, selected = nil, perPage = 0, lowAlerted = {},
   mode = "items", rsel = nil, rvar = 1, crafts = 1, canMake = false }
 
-local function rebuildList()
+-- ---------------------------------------------------------- typo-tolerant search
+-- Edit distance that also counts two swapped letters as one mistake ("daimnod" -> "diamond" = 2).
+local function typoDist(a, b, limit)
+  local la, lb = #a, #b
+  if math.abs(la - lb) > limit then return limit + 1 end
+  local prev2, prev, cur = {}, {}, {}
+  for j = 0, lb do prev[j] = j end
+  for i = 1, la do
+    cur = { [0] = i }
+    local ai, rowMin = a:byte(i), i
+    for j = 1, lb do
+      local bj = b:byte(j)
+      local cost = ai == bj and 0 or 1
+      local v = math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+      if i > 1 and j > 1 and ai == b:byte(j - 1) and a:byte(i - 1) == bj then v = math.min(v, prev2[j - 2] + 1) end
+      cur[j] = v
+      if v < rowMin then rowMin = v end
+    end
+    if rowMin > limit then return limit + 1 end
+    prev2, prev = prev, cur
+  end
+  return prev[lb]
+end
+
+local wordCache = setmetatable({}, { __mode = "k" })
+local function wordsOf(lowerName)
+  local w = wordCache[lowerName]
+  if not w then
+    w = {}
+    for word in lowerName:gmatch("[%w']+") do w[#w + 1] = word end
+    wordCache[lowerName] = w
+  end
+  return w
+end
+
+-- every word you typed must be close to some word of the name; returns total mistakes or nil
+local function fuzzyScore(qwords, lowerName)
+  local words = wordsOf(lowerName)
+  local total = 0
+  for _, qw in ipairs(qwords) do
+    local n = #qw
+    local allow = n <= 2 and 0 or (n <= 4 and 1 or (n <= 7 and 2 or 3))
+    local best = allow + 1
+    local q1, q2 = qw:sub(1, 1), qw:sub(2, 2)
+    for _, w in ipairs(words) do
+      local w1 = w:sub(1, 1)
+      if w1 == q1 or w1 == q2 or w:sub(2, 2) == q1 then          -- cheap filter: the start has to be close
+        local d
+        if allow == 0 then d = (w:sub(1, n) == qw) and 0 or 1
+        else
+          d = typoDist(qw, w, allow)
+          if d > 0 and #w > n then d = math.min(d, typoDist(qw, w:sub(1, n), allow) + 0.5) end   -- still typing
+        end
+        if d < best then best = d; if d == 0 then break end end
+      end
+    end
+    if best > allow + 0.5 then return nil end
+    total = total + best
+  end
+  return total
+end
+local function queryWords(q)
+  local t = {}
+  for w in q:gmatch("[%w']+") do t[#t + 1] = w end
+  return t
+end
+local FUZZY_BELOW = 10        -- look for close matches when the normal search finds fewer than this
+
+local function rebuildList(quick)
   items = {}
+  UI.fuzzy, UI.didYouMean = false, nil
+  UI.fuzzyAt = nil
   local q = UI.search:lower()
+  local qs = q:gsub("%s+", "")                     -- "pokeball" also finds "Poke Ball"
+  local wantFuzzy = #q >= 3 and not quick
   if UI.mode == "recipes" then
     if R.state ~= "ready" then return end
     local only = UI.canMake and R.canSet
     for j, o in ipairs(R.outs) do
-      if (q == "" or R.lower[j]:find(q, 1, true)) and (not UI.canMake or (only and only[o])) then
+      if (q == "" or R.lower[j]:find(q, 1, true) or (#qs >= 3 and R.lns[j]:find(qs, 1, true)))
+         and (not UI.canMake or (only and only[o])) then
         local nm = R.name[o]
         local l = nm:lower():gsub(" %(.*%)$", "")
-        local rank = q == "" and 2 or (l == q and 0 or (l:sub(1, #q) == q and 1 or 2))
+        local ls = R.lns[j]
+        local rank = q == "" and 2 or ((l == q or ls == qs) and 0 or ((l:sub(1, #q) == q or ls:sub(1, #qs) == qs) and 1 or 2))
         items[#items + 1] = { ri = o, name = nm, rank = rank }
       end
     end
-    if q ~= "" then
-      table.sort(items, function(a, b) if a.rank ~= b.rank then return a.rank < b.rank end return a.name < b.name end)
+    local qw = queryWords(q)
+    if #items < FUZZY_BELOW and #q >= 3 and #qw > 0 and not wantFuzzy then UI.fuzzyAt = now() + 0.4 end
+    if #items < FUZZY_BELOW and wantFuzzy and #qw > 0 then
+      local have = {}
+      for _, it in ipairs(items) do have[it.ri] = true end
+      for j, o in ipairs(R.outs) do
+        if not have[o] and (not UI.canMake or (only and only[o])) then
+          local sc = fuzzyScore(qw, R.lname[j])
+          if sc then
+            items[#items + 1] = { ri = o, name = R.name[o], rank = 3 + sc, len = #(R.lname[j]:gsub(" %(.*%)$", "")) }
+            UI.fuzzy = true
+          end
+        end
+      end
     end
+    if q ~= "" then
+      table.sort(items, function(a, b)
+        if a.rank ~= b.rank then return a.rank < b.rank end
+        if a.rank >= 3 and a.len ~= b.len then return a.len < b.len end   -- shortest close match = best guess
+        local am, bm = R.id[a.ri]:find("^minecraft:") ~= nil, R.id[b.ri]:find("^minecraft:") ~= nil
+        if am ~= bm then return am end                                     -- vanilla first on ties
+        return a.name < b.name
+      end)
+    end
+    if UI.fuzzy and items[1] and items[1].rank >= 3 then UI.didYouMean = items[1].name:gsub(" %(.*%)$", "") end
     return
   end
   for id, it in pairs(index) do
     local name = data.names[id] or prettyId(id)
-    if q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true) then
+    if q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true)
+       or (#qs >= 3 and name:lower():gsub("%s+", ""):find(qs, 1, true)) then
       items[#items + 1] = { id = id, name = name, count = it.count }
     end
+  end
+  local qw = queryWords(q)
+  if #items < FUZZY_BELOW and #q >= 3 and #qw > 0 and not wantFuzzy then UI.fuzzyAt = now() + 0.4 end
+  if #items < FUZZY_BELOW and wantFuzzy and #qw > 0 then
+    local have = {}
+    for _, it in ipairs(items) do have[it.id] = true end
+    local close = {}
+    for id, it in pairs(index) do
+      if not have[id] then
+        local name = data.names[id] or prettyId(id)
+        local sc = fuzzyScore(qw, name:lower())
+        if sc then close[#close + 1] = { id = id, name = name, count = it.count, sc = sc } end
+      end
+    end
+    table.sort(close, function(a, b)
+      if a.sc ~= b.sc then return a.sc < b.sc end
+      if #a.name ~= #b.name then return #a.name < #b.name end
+      return a.count > b.count
+    end)
+    if #close > 0 then UI.fuzzy = true; if #items == 0 then UI.didYouMean = close[1].name end end
+    table.sort(items, function(a, b) if a.count ~= b.count then return a.count > b.count end return a.name < b.name end)
+    for _, c in ipairs(close) do items[#items + 1] = c end
+    return                                         -- exact hits first, then closest typos
   end
   if data.sort == "name" then
     table.sort(items, function(a, b) return a.name:lower() < b.name:lower() end)
@@ -572,7 +696,13 @@ local function drawSearchBar()
   local rec = UI.mode == "recipes"
   local q = UI.search == "" and (rec and "search recipes" or "tap letters or type to search") or UI.search
   text(LX1 + 1, 5, "Search:", YELLOW, PANEL)
-  text(LX1 + 9, 5, fit(q, LX2 - LX1 - 58) .. (UI.search ~= "" and "_" or ""), UI.search == "" and GRAY or WHITE, PANEL)
+  local qtxt = fit(q, LX2 - LX1 - 58) .. (UI.search ~= "" and "_" or "")
+  text(LX1 + 9, 5, qtxt, UI.search == "" and GRAY or WHITE, PANEL)
+  if UI.didYouMean then
+    local room = LX2 - 48 - (LX1 + 9 + #qtxt + 2)
+    local dym = (room >= #UI.didYouMean + 17) and ("did you mean " .. UI.didYouMean .. "?") or ("-> " .. UI.didYouMean .. "?")
+    if room > 6 then text(LX1 + 9 + #qtxt + 2, 5, fit(dym, room), CYAN, PANEL) end
+  end
   button("mode", LX2 - 47, 5, LX2 - 36, 5, rec and "ITEMS" or "RECIPES", BLACK, rec and CYAN or PURPLE, function()
     setMode(rec and "items" or "recipes")
   end)
@@ -662,7 +792,7 @@ local function drawList()
     function() if UI.page > 1 then UI.page = UI.page - 1 end end)
   button("next", LX2 - 9, py, LX2, H, "NEXT " .. string.char(16), YELLOW, UI.page < pages and GRAY or PANEL,
     function() if UI.page < pages then UI.page = UI.page + 1 end end)
-  local pg = "page " .. UI.page .. "/" .. pages .. "   " .. #items .. " shown"
+  local pg = "page " .. UI.page .. "/" .. pages .. "   " .. #items .. " shown" .. (UI.fuzzy and "  (incl. close matches)" or "")
   text(LX1 + math.floor((LX2 - LX1 - #pg) / 2), py, pg, LGRAY)
   local age = now() - status.at
   if busy then
@@ -680,12 +810,12 @@ local function drawKeyboard(y0)
     for i = 1, #row do
       local ch = row:sub(i, i)
       local x = RX1 + offset + (i - 1) * 4
-      button("key" .. ch, x, y, x + 2, y + 2, ch, WHITE, GRAY, function() UI.search = UI.search .. ch:lower(); UI.page = 1; rebuildList() end)
+      button("key" .. ch, x, y, x + 2, y + 2, ch, WHITE, GRAY, function() UI.search = UI.search .. ch:lower(); UI.page = 1; rebuildList(true) end)
     end
     y = y + 4
   end
-  button("space", RX1, y, RX1 + 14, y + 2, "SPACE", WHITE, GRAY, function() UI.search = UI.search .. " "; rebuildList() end)
-  button("del", RX1 + 16, y, RX1 + 26, y + 2, "DEL", WHITE, GRAY, function() UI.search = UI.search:sub(1, -2); UI.page = 1; rebuildList() end)
+  button("space", RX1, y, RX1 + 14, y + 2, "SPACE", WHITE, GRAY, function() UI.search = UI.search .. " "; rebuildList(true) end)
+  button("del", RX1 + 16, y, RX1 + 26, y + 2, "DEL", WHITE, GRAY, function() UI.search = UI.search:sub(1, -2); UI.page = 1; rebuildList(true) end)
   button("clr", RX1 + 28, y, RX2, y + 2, "CLEAR", BLACK, RED, function() UI.search = ""; UI.page = 1; rebuildList() end)
   return y + 4
 end
@@ -956,6 +1086,7 @@ local function ui()
     local ev, a, b, c = os.pullEventRaw()
     if ev == "terminate" then return
     elseif ev == "timer" and a == timer then
+      if UI.fuzzyAt and now() >= UI.fuzzyAt then rebuildList() end   -- typo search once you stop typing
       draw(); timer = os.startTimer(0.25)
     elseif ev == "monitor_touch" and monNames[a] then
       for i = #hits, 1, -1 do
@@ -964,9 +1095,9 @@ local function ui()
       end
       draw()
     elseif ev == "char" then
-      UI.search = UI.search .. a; UI.page = 1; rebuildList(); draw()
+      UI.search = UI.search .. a; UI.page = 1; rebuildList(true); draw()
     elseif ev == "key" then
-      if a == keys.backspace then UI.search = UI.search:sub(1, -2); UI.page = 1; rebuildList(); draw()
+      if a == keys.backspace then UI.search = UI.search:sub(1, -2); UI.page = 1; rebuildList(true); draw()
       elseif a == keys.enter then UI.search = ""; rebuildList(); draw() end
     elseif ev == "peripheral" or ev == "peripheral_detach" then
       os.queueEvent("storage_task")
@@ -986,7 +1117,7 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end, R = R, rankRecipes = rankRecipes, craftPlan = craftPlan }
+    busy = function() return busy end, R = R, rebuild = function() rebuildList() end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
 parallel.waitForAny(ui, worker, function()
