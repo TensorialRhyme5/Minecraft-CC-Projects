@@ -637,6 +637,7 @@ do
   -- a crafting-chain step that needs smelting: send what the recipe needs, wait for it
   function SM.run(st, show)
     if #SM.furnaces == 0 then return 0, "no furnaces connected" end
+    if SM.rescan then SM.rescan() end                     -- see what earlier steps just made
     local plan = craftPlan(st.rc, st.crafts)
     if plan.short > 0 then return 0, "not enough to smelt" end
     local mine, total = {}, 0
