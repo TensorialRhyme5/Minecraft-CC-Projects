@@ -17,6 +17,56 @@ for _, name in ipairs(peripheral.getNames()) do
   if peripheral.getType(name) == "modem" and pcall(rednet.open, name) then netOn = true end
 end
 
+-- ---------------------------------------------------------- SHA-256 (signs pocket remote requests)
+local band, bor, bxor, bnot, rrot, rshift = bit32.band, bit32.bor, bit32.bxor, bit32.bnot, bit32.rrotate, bit32.rshift
+local SHA_K = {
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+}
+local function sha256(msg)
+  msg = tostring(msg)
+  local len = #msg
+  msg = msg .. "\128" .. string.rep("\0", (55 - len) % 64)
+  local bits = len * 8
+  local hi = math.floor(bits / 4294967296)
+  msg = msg .. string.char(
+    band(rshift(hi, 24), 255), band(rshift(hi, 16), 255), band(rshift(hi, 8), 255), band(hi, 255),
+    band(rshift(bits, 24), 255), band(rshift(bits, 16), 255), band(rshift(bits, 8), 255), band(bits, 255))
+  local h0, h1, h2, h3, h4, h5, h6, h7 =
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+  local w = {}
+  for chunk = 1, #msg, 64 do
+    for i = 0, 15 do
+      local a, b, c, d = msg:byte(chunk + i * 4, chunk + i * 4 + 3)
+      w[i] = bor(a * 16777216, b * 65536, c * 256, d)
+    end
+    for i = 16, 63 do
+      local s0 = bxor(rrot(w[i - 15], 7), rrot(w[i - 15], 18), rshift(w[i - 15], 3))
+      local s1 = bxor(rrot(w[i - 2], 17), rrot(w[i - 2], 19), rshift(w[i - 2], 10))
+      w[i] = band(w[i - 16] + s0 + w[i - 7] + s1, 0xffffffff)
+    end
+    local a, b, c, d, e, f, g, h = h0, h1, h2, h3, h4, h5, h6, h7
+    for i = 0, 63 do
+      local S1 = bxor(rrot(e, 6), rrot(e, 11), rrot(e, 25))
+      local ch = bxor(band(e, f), band(bnot(e), g))
+      local t1 = band(h + S1 + ch + SHA_K[i + 1] + w[i], 0xffffffff)
+      local S0 = bxor(rrot(a, 2), rrot(a, 13), rrot(a, 22))
+      local maj = bxor(band(a, b), band(a, c), band(b, c))
+      local t2 = band(S0 + maj, 0xffffffff)
+      h, g, f, e, d, c, b, a = g, f, e, band(d + t1, 0xffffffff), c, b, a, band(t1 + t2, 0xffffffff)
+    end
+    h0, h1, h2, h3 = band(h0 + a, 0xffffffff), band(h1 + b, 0xffffffff), band(h2 + c, 0xffffffff), band(h3 + d, 0xffffffff)
+    h4, h5, h6, h7 = band(h4 + e, 0xffffffff), band(h5 + f, 0xffffffff), band(h6 + g, 0xffffffff), band(h7 + h, 0xffffffff)
+  end
+  return string.format("%08x%08x%08x%08x%08x%08x%08x%08x", h0, h1, h2, h3, h4, h5, h6, h7)
+end
+
 -- ---------------------------------------------------------- drawing
 local C = {
   bg = colors.black, panel = colors.gray, dim = colors.lightGray, text = colors.white,
@@ -61,12 +111,45 @@ local function button(id, x1, y1, x2, y2, label, fg, bg, fn)
 end
 
 -- ---------------------------------------------------------- state
-local UI = { tab = "items", q = "", page = 1, sel = nil, toMe = true, searchAt = 0 }
+local UI = { tab = "items", q = "", page = 1, sel = nil, toMe = true, searchAt = 0, code = "" }
 local S = { id = nil, results = {}, found = 0, info = nil, infoAt = 0, lastQ = nil, lookAt = -100 }
 local M = { st = nil, at = 0, id = nil, lists = nil }
 
+-- pairing: the storage shows a code, you type it here; requests are then signed with a key made
+-- from that code (the code itself never goes over the air)
+local KEYFILE = "storage_pairing.txt"
+local PAIRED = nil                    -- { key, player }
+if fs.exists(KEYFILE) then
+  local f = fs.open(KEYFILE, "r")
+  local ok, d = pcall(textutils.unserialize, f.readAll()); f.close()
+  if ok and type(d) == "table" and d.key then PAIRED = d end
+end
+local lastCtr = 0
+local function nextCtr()
+  local c = os.epoch("utc")
+  if c <= lastCtr then c = lastCtr + 1 end
+  lastCtr = c
+  return c
+end
+local function canon(msg)
+  return table.concat({ tostring(msg.type), tostring(msg.q or ""), tostring(msg.id or ""), tostring(msg.n or ""), tostring(msg.to or "") }, "|")
+end
 local function storageSend(msg)
-  if S.id then rednet.send(S.id, msg, STORE_PROTO) end
+  if not S.id or not PAIRED then return end
+  msg.dev = os.getComputerID()
+  msg.ctr = nextCtr()
+  msg.mac = sha256(PAIRED.key .. "|" .. msg.ctr .. "|" .. canon(msg))
+  rednet.send(S.id, msg, STORE_PROTO)
+end
+local function sendPair()
+  local code = UI.code:upper()
+  if #code ~= 8 then UI.pairMsg = "The code has 8 letters/numbers"; return end
+  local dev = os.getComputerID()
+  local nonce = tostring(math.random(1, 2 ^ 30)) .. tostring(os.epoch("utc"))
+  UI.pairing = code
+  UI.pairMsg = "Pairing..."
+  local msg = { type = "pair", dev = dev, nonce = nonce, proof = sha256(code .. "|pair|" .. dev .. "|" .. nonce) }
+  if S.id then rednet.send(S.id, msg, STORE_PROTO) else rednet.broadcast(msg, STORE_PROTO) end
 end
 local function findStorage()
   S.lookAt = now()
@@ -88,7 +171,22 @@ end
 
 -- ---------------------------------------------------------- ITEMS tab
 local ROWS_TOP, ROWS_BOT = 3, H - 5
+local function drawPairing()
+  center(3, "PAIR WITH STORAGE", C.accent)
+  text(2, 5, "On the storage screen:", C.dim)
+  text(2, 6, "REMOTES > tap your name", C.text)
+  text(2, 8, "then type the code here:", C.dim)
+  fill(4, 10, W - 3, 12, C.panel)
+  local shown = UI.code:upper()
+  shown = (shown:sub(1, 4) .. (#shown > 4 and ("-" .. shown:sub(5)) or "")) .. (#shown < 8 and "_" or "")
+  center(11, shown, C.accent, C.panel)
+  button("pairgo", 4, 14, W - 3, 16, "PAIR", C.bg, #UI.code == 8 and C.good or C.panel, sendPair)
+  if UI.pairMsg then center(18, fit(UI.pairMsg, W), UI.pairMsg:find("ail") and C.bad or C.dim) end
+  if not S.id then center(H, "(looking for storage...)", C.panel) end
+end
+
 local function drawItems()
+  if not PAIRED then drawPairing(); return end
   -- search box
   fill(1, 2, W, 2, C.panel)
   if UI.q == "" then text(2, 2, "type to search...", C.dim, C.panel)
@@ -104,7 +202,7 @@ local function drawItems()
     text(2, 7, "In storage: ", C.dim); text(14, 7, commas(it.count), C.cyan)
     text(2, 9, "Send to:", C.accent)
     local me = UI.toMe and (not S.info or S.info.im)
-    button("tome", 11, 9, 17, 9, "ME", me and C.bg or C.text, me and C.cyan or C.panel, function() UI.toMe = true end)
+    button("tome", 11, 9, 17, 9, fit(PAIRED and PAIRED.player or "ME", 7), me and C.bg or C.text, me and C.cyan or C.panel, function() UI.toMe = true end)
     button("topk", 19, 9, W - 1, 9, "BARREL", me and C.text or C.bg, me and C.panel or C.good, function() UI.toMe = false end)
     local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
     for i, a in ipairs(amounts) do
@@ -271,6 +369,12 @@ local function main()
       draw(t)
     elseif ev == "mouse_scroll" and UI.tab == "items" and not UI.sel then
       UI.page = math.max(1, UI.page + a); draw(t)
+    elseif ev == "char" and UI.tab == "items" and not PAIRED then
+      if a:match("[%w]") and #UI.code < 8 then UI.code = UI.code .. a:upper() end
+      draw(t)
+    elseif ev == "key" and UI.tab == "items" and not PAIRED then
+      if a == keys.backspace then UI.code = UI.code:sub(1, -2) elseif a == keys.enter then sendPair() end
+      draw(t)
     elseif ev == "char" and UI.tab == "items" then
       UI.q = UI.q .. a; UI.page = 1; UI.sel = nil; UI.searchAt = t + 0.35; draw(t)
     elseif ev == "key" and UI.tab == "items" then
@@ -278,7 +382,20 @@ local function main()
       elseif a == keys.enter then search() end
     elseif ev == "rednet_message" then
       local msg = b
-      if c == STORE_PROTO and type(msg) == "table" then
+      if c == STORE_PROTO and type(msg) == "table" and msg.dev ~= nil and tonumber(msg.dev) ~= os.getComputerID() then
+        -- a reply meant for another pocket: ignore
+      elseif c == STORE_PROTO and type(msg) == "table" and msg.type == "paired" then
+        if msg.ok and UI.pairing then
+          PAIRED = { key = sha256(UI.pairing .. "|key|" .. os.getComputerID()), player = msg.player }
+          local f = fs.open(KEYFILE, "w"); f.write(textutils.serialize(PAIRED)); f.close()
+          S.id, UI.code, UI.pairing, UI.pairMsg = a, "", nil, nil
+          search()
+        else
+          UI.pairMsg = "Pairing failed: " .. tostring(msg.why or "?")
+        end
+      elseif c == STORE_PROTO and type(msg) == "table" and msg.type == "denied" then
+        if msg.why == "not paired" then PAIRED = nil; fs.delete(KEYFILE); UI.pairMsg = "This pocket was removed - pair again" end
+      elseif c == STORE_PROTO and type(msg) == "table" then
         S.id = a
         if msg.type == "results" then
           if msg.q == UI.q then S.results, S.found = msg.items or {}, msg.found or 0 end

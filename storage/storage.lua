@@ -89,13 +89,14 @@ local function fit(s, w) if #s > w then return s:sub(1, math.max(1, w - 1)) .. "
 
 -- ---------------------------------------------------------- saved settings (alerts + item names)
 local SAVE = "storage_data.txt"
-local data = { alerts = {}, names = {}, sort = "count" }
+local data = { alerts = {}, names = {}, sort = "count", remotes = {} }
 if fs.exists(SAVE) then
   local f = fs.open(SAVE, "r")
   local ok, d = pcall(textutils.unserialize, f.readAll())
   f.close()
   if ok and type(d) == "table" then
     data.alerts = type(d.alerts) == "table" and d.alerts or {}
+    data.remotes = type(d.remotes) == "table" and d.remotes or {}
     data.names = type(d.names) == "table" and d.names or {}
     data.sort = d.sort == "name" and "name" or "count"
   end
@@ -963,39 +964,102 @@ local function chainCraft(t)
   return made, err, #steps
 end
 
+-- ---------------------------------------------------------- SHA-256 (signs pocket remote requests)
+local band, bor, bxor, bnot, rrot, rshift = bit32.band, bit32.bor, bit32.bxor, bit32.bnot, bit32.rrotate, bit32.rshift
+local SHA_K = {
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+}
+local function sha256(msg)
+  msg = tostring(msg)
+  local len = #msg
+  msg = msg .. "\128" .. string.rep("\0", (55 - len) % 64)
+  local bits = len * 8
+  local hi = math.floor(bits / 4294967296)
+  msg = msg .. string.char(
+    band(rshift(hi, 24), 255), band(rshift(hi, 16), 255), band(rshift(hi, 8), 255), band(hi, 255),
+    band(rshift(bits, 24), 255), band(rshift(bits, 16), 255), band(rshift(bits, 8), 255), band(bits, 255))
+  local h0, h1, h2, h3, h4, h5, h6, h7 =
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+  local w = {}
+  for chunk = 1, #msg, 64 do
+    for i = 0, 15 do
+      local a, b, c, d = msg:byte(chunk + i * 4, chunk + i * 4 + 3)
+      w[i] = bor(a * 16777216, b * 65536, c * 256, d)
+    end
+    for i = 16, 63 do
+      local s0 = bxor(rrot(w[i - 15], 7), rrot(w[i - 15], 18), rshift(w[i - 15], 3))
+      local s1 = bxor(rrot(w[i - 2], 17), rrot(w[i - 2], 19), rshift(w[i - 2], 10))
+      w[i] = band(w[i - 16] + s0 + w[i - 7] + s1, 0xffffffff)
+    end
+    local a, b, c, d, e, f, g, h = h0, h1, h2, h3, h4, h5, h6, h7
+    for i = 0, 63 do
+      local S1 = bxor(rrot(e, 6), rrot(e, 11), rrot(e, 25))
+      local ch = bxor(band(e, f), band(bnot(e), g))
+      local t1 = band(h + S1 + ch + SHA_K[i + 1] + w[i], 0xffffffff)
+      local S0 = bxor(rrot(a, 2), rrot(a, 13), rrot(a, 22))
+      local maj = bxor(band(a, b), band(a, c), band(b, c))
+      local t2 = band(S0 + maj, 0xffffffff)
+      h, g, f, e, d, c, b, a = g, f, e, band(d + t1, 0xffffffff), c, b, a, band(t1 + t2, 0xffffffff)
+    end
+    h0, h1, h2, h3 = band(h0 + a, 0xffffffff), band(h1 + b, 0xffffffff), band(h2 + c, 0xffffffff), band(h3 + d, 0xffffffff)
+    h4, h5, h6, h7 = band(h4 + e, 0xffffffff), band(h5 + f, 0xffffffff), band(h6 + g, 0xffffffff), band(h7 + h, 0xffffffff)
+  end
+  return string.format("%08x%08x%08x%08x%08x%08x%08x%08x", h0, h1, h2, h3, h4, h5, h6, h7)
+end
+
 -- ---------------------------------------------------------- straight to / from you (Advanced Peripherals Inventory Manager)
 -- AP 0.8 (1.21): importItem(chestName, filter) moves chest -> you, exportItem(chestName, filter) moves you -> chest.
 -- The chest is any inventory this computer can see on the network; slots are numbered from 1.
 -- Your inventory as the manager sees it: 1-9 hotbar, 10-36 main, 37-40 armor, 41 offhand.
-local IM = { name = nil, owner = nil, err = nil }
+local IMS = {}                 -- every Inventory Manager: { name, owner }
 local function findIM()
-  IM.name = nil
+  local list = {}
   for _, n in ipairs(peripheral.getNames()) do
     local t = (peripheral.getType(n) or ""):lower()
-    if t:find("inventory") and t:find("manager") then IM.name = n; break end
+    if t:find("inventory") and t:find("manager") then
+      local ok, o = pcall(peripheral.call, n, "getOwner")
+      list[#list + 1] = { name = n, owner = (ok and type(o) == "string") and o or nil }
+    end
   end
-  IM.owner = nil
-  if IM.name then
-    local ok, o = pcall(peripheral.call, IM.name, "getOwner")
-    if ok and type(o) == "string" then IM.owner = o end
-  end
-  return IM.name
+  table.sort(list, function(a, b) return a.name < b.name end)
+  IMS = list
+  return #IMS > 0
 end
-local function imMove(method, chest, filter)
-  local ok, n, err = pcall(peripheral.call, IM.name, method, chest, filter)
+local function owners()
+  local t = {}
+  for _, m in ipairs(IMS) do if m.owner then t[#t + 1] = m.owner end end
+  return t
+end
+-- the manager holding this player's card (or the first one)
+local function imFor(player)
+  for _, m in ipairs(IMS) do if m.owner and m.owner == player then return m end end
+  if player then return nil end
+  return IMS[1]
+end
+local function imMove(im, method, chest, filter)
+  local ok, n, err = pcall(peripheral.call, im.name, method, chest, filter)
   if not ok then return 0, tostring(n):gsub("^.-:%d+: ", "") end
   if type(n) ~= "number" then return 0, tostring(err or "nothing moved") end
   return n
 end
 
-local function sendToPlayer(key, want)
-  if not IM.name and not findIM() then return 0, "no Inventory Manager on the network" end
+local function sendToPlayer(key, want, player)
+  if #IMS == 0 and not findIM() then return 0, "no Inventory Manager on the network" end
+  local im = imFor(player)
+  if not im then return 0, "no Inventory Manager has " .. tostring(player) .. "'s Memory Card" end
   local e = key:find("#", 1, true) and index[key] or byName[key]
   if not e or e.count == 0 then return 0, "none in storage" end
   local total, left = 0, math.min(want, e.count)
   for _, loc in ipairs(e.locs) do                 -- straight from each chest slot into your inventory
     if left <= 0 then break end
-    local n, err = imMove("importItem", loc.inv, { name = e.name, fromSlot = loc.slot, count = math.min(left, loc.count) })
+    local n, err = imMove(im, "importItem", loc.inv, { name = e.name, fromSlot = loc.slot, count = math.min(left, loc.count) })
     if n == 0 and err then
       if total > 0 then return total, "your inventory is full" end
       return 0, (err:find("memory card") and "put a Memory Card bound to you in the Inventory Manager") or err
@@ -1016,9 +1080,11 @@ local function homesFor(name)
 end
 
 -- empty your main inventory (slots 10-36) straight into storage; hotbar, armor and offhand stay
-local function dumpPlayer()
-  if not IM.name and not findIM() then return 0, "no Inventory Manager on the network" end
-  local ok, list = pcall(peripheral.call, IM.name, "list")
+local function dumpPlayer(player)
+  if #IMS == 0 and not findIM() then return 0, "no Inventory Manager on the network" end
+  local im = imFor(player)
+  if not im then return 0, "no Inventory Manager has " .. tostring(player) .. "'s Memory Card" end
+  local ok, list = pcall(peripheral.call, im.name, "list")
   if not ok or type(list) ~= "table" then
     return 0, tostring(list):find("memory card") and "put a Memory Card bound to you in the Inventory Manager" or "couldn't read your inventory"
   end
@@ -1029,7 +1095,7 @@ local function dumpPlayer()
       local left = it.count
       for _, chest in ipairs(homesFor(it.name)) do
         if left <= 0 then break end
-        local n, err = imMove("exportItem", chest, { name = it.name, fromSlot = slot, count = left })
+        local n, err = imMove(im, "exportItem", chest, { name = it.name, fromSlot = slot, count = left })
         if err then lastErr = err end
         left, moved = left - n, moved + n
       end
@@ -1378,11 +1444,24 @@ local function drawDetail()
   if #invs > 5 then text(RX1 + 1, 17, "+" .. (#invs - 5) .. " more", GRAY, PANEL) end
   -- retrieve
   local _, kind = currentPickup()
-  local toMe = IM.name ~= nil and UI.sendMe ~= false
-  if IM.name then
-    text(RX1, 19, "SEND TO", YELLOW, PANEL)
-    button("toMe", RX1 + 9, 19, RX1 + 20, 19, "ME", toMe and BLACK or WHITE, toMe and CYAN or GRAY, function() UI.sendMe = true end)
-    button("toPick", RX1 + 22, 19, RX2, 19, kind or "PICKUP", toMe and WHITE or BLACK, toMe and GRAY or LIME, function() UI.sendMe = false end)
+  local who = owners()
+  if UI.sendTo ~= "pickup" then
+    local okWho = false
+    for _, w in ipairs(who) do if w == UI.sendTo then okWho = true end end
+    if not okWho then UI.sendTo = who[1] or "pickup" end
+  end
+  local toMe = UI.sendTo ~= "pickup"
+  if #who > 0 then
+    text(RX1, 19, "TO", YELLOW, PANEL)
+    local slots = math.min(3, #who) + 1
+    local bw = math.floor((RX2 - RX1 - 3 - (slots - 1)) / slots)
+    for i = 1, math.min(3, #who) do
+      local x = RX1 + 3 + (i - 1) * (bw + 1)
+      local on = UI.sendTo == who[i]
+      button("to" .. i, x, 19, x + bw - 1, 19, fit(who[i], bw), on and BLACK or WHITE, on and CYAN or GRAY, function() UI.sendTo = who[i] end)
+    end
+    local x = RX1 + 3 + math.min(3, #who) * (bw + 1)
+    button("toPick", x, 19, RX2, 19, fit(kind or "PICKUP", RX2 - x + 1), toMe and WHITE or BLACK, toMe and GRAY or LIME, function() UI.sendTo = "pickup" end)
   else
     text(RX1, 19, "SEND TO PICKUP", YELLOW, PANEL)
     text(RX1 + 15, 19, kind and (string.char(16) .. " " .. kind) or "(none connected!)", kind == "BACKPACK" and CYAN or (kind and LIME or RED), PANEL)
@@ -1392,8 +1471,8 @@ local function drawDetail()
     local x = RX1 + (i - 1) * 10
     button("get" .. a[1], x, 21, x + 8, 23, a[1], BLACK, toMe and CYAN or LIME, function()
       if toMe then
-        queue({ kind = "tome", id = id, n = a[2], name = name })
-        setStatus("Sending " .. a[1] .. " " .. name .. " to you...", CYAN)
+        queue({ kind = "tome", id = id, n = a[2], name = name, player = UI.sendTo })
+        setStatus("Sending " .. a[1] .. " " .. name .. " to " .. UI.sendTo .. "...", CYAN)
       else
         queue({ kind = "retrieve", id = id, n = a[2] })
         setStatus("Sending " .. a[1] .. " " .. name .. "...", LIME)
@@ -1422,6 +1501,52 @@ local function drawDetail()
     end)
   end
   button("close", RX1, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.selected = nil end)
+end
+
+local drawRemotes
+-- paired pocket remotes + pairing a new one
+local PAIR = { code = nil, until_ = 0, player = nil }
+local CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   -- no 0/O or 1/I mix-ups
+local function newPairCode(player)
+  local c = ""
+  for i = 1, 8 do local k = math.random(1, #CODE_CHARS); c = c .. CODE_CHARS:sub(k, k) end
+  PAIR.code, PAIR.until_, PAIR.player = c, now() + 120, player
+end
+drawRemotes = function()
+  text(RX1, 6, "POCKET REMOTES", YELLOW)
+  text(RX1, 7, "only paired remotes can use the storage", GRAY)
+  local y = 9
+  local ids = {}
+  for id in pairs(data.remotes) do ids[#ids + 1] = id end
+  table.sort(ids)
+  if #ids == 0 then text(RX1, y, "none paired yet", LGRAY); y = y + 1 end
+  for _, id in ipairs(ids) do
+    if y > 17 then break end
+    local r = data.remotes[id]
+    text(RX1, y, "#" .. id, CYAN)
+    text(RX1 + 7, y, fit(r.player or "anyone", 18), WHITE)
+    button("rm" .. id, RX2 - 9, y, RX2, y, "REMOVE", WHITE, RED, function()
+      data.remotes[id] = nil; save(); setStatus("Removed pocket remote #" .. id, YELLOW)
+    end)
+    y = y + 2
+  end
+  text(RX1, 20, "PAIR A NEW REMOTE FOR:", YELLOW)
+  local who = owners()
+  if #who == 0 then who = { "anyone" } end
+  for i = 1, math.min(3, #who) do
+    local x = RX1 + (i - 1) * 13
+    button("pairfor" .. i, x, 22, x + 11, 24, fit(who[i], 11), BLACK, CYAN, function()
+      newPairCode(who[i] ~= "anyone" and who[i] or nil)
+    end)
+  end
+  if PAIR.code and now() < PAIR.until_ then
+    fill(RX1, 26, RX2, 30, HILITE)
+    text(RX1 + 1, 26, "Type this on the pocket:", LGRAY, HILITE)
+    local shown = PAIR.code:sub(1, 4) .. "-" .. PAIR.code:sub(5)
+    text(RX1 + math.floor((RX2 - RX1 + 1 - #shown * 2) / 2), 28, (shown:gsub(".", "%0 ")), YELLOW, HILITE)
+    text(RX1 + 1, 30, "for " .. (PAIR.player or "anyone") .. "  -  " .. math.ceil(PAIR.until_ - now()) .. "s left", LGRAY, HILITE)
+  elseif PAIR.code then PAIR.code = nil end
+  button("rback", RX1, H - 3, RX2, H - 1, string.char(17) .. " BACK", BLACK, YELLOW, function() UI.panel = nil; PAIR.code = nil end)
 end
 
 -- recipe view: 3x3 grid, what you have / are missing, how many to craft, send to pickup
@@ -1566,12 +1691,28 @@ local function draw()
   if UI.mode == "recipes" and UI.rsel then drawRecipe()
   elseif UI.mode == "items" and UI.selected then drawDetail()
   else
-    local y = drawKeyboard(6)
-    drawAlerts(y + 1)
-    if IM.name then
-      button("dump", RX1, H - 3, RX2, H - 1, "PUT AWAY MY INVENTORY", BLACK, CYAN, function()
-        queue({ kind = "dump" }); setStatus("Emptying your inventory into storage...", CYAN)
-      end)
+    if UI.panel == "remotes" then drawRemotes()
+    else
+      local y = drawKeyboard(6)
+      drawAlerts(y + 1)
+      local who = owners()
+      local by = H - 3
+      if #who == 1 then
+        button("dump", RX1, by, RX2 - 13, H - 1, "PUT AWAY MY INVENTORY", BLACK, CYAN, function()
+          queue({ kind = "dump", player = who[1] }); setStatus("Emptying " .. who[1] .. "'s inventory into storage...", CYAN)
+        end)
+      elseif #who >= 2 then
+        text(RX1, by - 1, "PUT AWAY INVENTORY:", YELLOW)
+        local n = math.min(3, #who)
+        local bw = math.floor((RX2 - 13 - RX1 + 1 - (n - 1)) / n)
+        for i = 1, n do
+          local x = RX1 + (i - 1) * (bw + 1)
+          button("dump" .. i, x, by, x + bw - 1, H - 1, fit(who[i], bw), BLACK, CYAN, function()
+            queue({ kind = "dump", player = who[i] }); setStatus("Emptying " .. who[i] .. "'s inventory into storage...", CYAN)
+          end)
+        end
+      end
+      button("remotes", RX2 - 11, by, RX2, H - 1, "REMOTES", WHITE, PURPLE, function() UI.panel = "remotes" end)
     end
   end
   present()
@@ -1608,9 +1749,24 @@ local function searchFor(q, limit)
   while #out > (limit or 60) do table.remove(out) end
   return out, total
 end
-local function netInfo()
-  return { type = "info", status = status.msg, busy = busy, im = IM.name ~= nil, owner = IM.owner,
+local function netInfo(player)
+  local who = owners()
+  return { type = "info", status = status.msg, busy = busy, im = #who > 0, owner = player or who[1], owners = who,
     used = stats.used, slots = stats.slots, total = stats.total, types = stats.types }
+end
+-- every request must be signed with the key made at pairing (the code itself is never sent)
+local function canon(msg)
+  return table.concat({ tostring(msg.type), tostring(msg.q or ""), tostring(msg.id or ""), tostring(msg.n or ""), tostring(msg.to or "") }, "|")
+end
+local function verify(msg)
+  local dev = tonumber(msg.dev)
+  local r = dev and data.remotes[dev]
+  if not r then return nil, "not paired" end
+  local ctr = tonumber(msg.ctr)
+  if not ctr or ctr <= (r.ctr or 0) then return nil, "old or replayed request" end
+  if msg.mac ~= sha256(r.key .. "|" .. ctr .. "|" .. canon(msg)) then return nil, "bad signature" end
+  r.ctr = ctr; dirty = true
+  return r
 end
 local function netServer()
   openNet()
@@ -1618,24 +1774,41 @@ local function netServer()
   while true do
     local from, msg = rednet.receive(NET_PROTO)
     if type(msg) == "table" then
-      if msg.type == "search" then
-        local res, total = searchFor(msg.q, 60)
-        local info = netInfo()
-        info.type, info.q, info.items, info.found = "results", msg.q, res, total
-        rednet.send(from, info, NET_PROTO)
-      elseif msg.type == "send" and type(msg.id) == "string" then
-        local n = tonumber(msg.n) or 1
-        local name = data.names[msg.id] or prettyId(msg.id)
-        if msg.to == "pickup" then queue({ kind = "retrieve", id = msg.id, n = n })
-        else queue({ kind = "tome", id = msg.id, n = n, name = name }) end
-        setStatus("Pocket: sending " .. (n == math.huge and "all" or n) .. " " .. name, CYAN)
-        rednet.send(from, netInfo(), NET_PROTO)
-      elseif msg.type == "dump" then
-        queue({ kind = "dump" })
-        setStatus("Pocket: emptying your inventory into storage...", CYAN)
-        rednet.send(from, netInfo(), NET_PROTO)
-      elseif msg.type == "info" then
-        rednet.send(from, netInfo(), NET_PROTO)
+      if msg.type == "pair" then
+        local dev = tonumber(msg.dev)
+        if PAIR.code and now() < PAIR.until_ and dev and msg.nonce
+           and msg.proof == sha256(PAIR.code .. "|pair|" .. dev .. "|" .. tostring(msg.nonce)) then
+          data.remotes[dev] = { key = sha256(PAIR.code .. "|key|" .. dev), player = PAIR.player, ctr = 0 }
+          save()
+          setStatus("Paired pocket remote #" .. dev .. (PAIR.player and (" for " .. PAIR.player) or ""), LIME)
+          PAIR.code = nil
+          rednet.send(from, { type = "paired", ok = true, player = data.remotes[dev].player, dev = dev }, NET_PROTO)
+        else
+          rednet.send(from, { type = "paired", ok = false, dev = dev, why = PAIR.code and "wrong code" or "no pairing code is showing" }, NET_PROTO)
+        end
+      else
+        local r, why = verify(msg)
+        if not r then
+          rednet.send(from, { type = "denied", why = why, dev = msg.dev }, NET_PROTO)
+        elseif msg.type == "search" then
+          local res, total = searchFor(msg.q, 60)
+          local info = netInfo(r.player)
+          info.type, info.q, info.items, info.found = "results", msg.q, res, total
+          rednet.send(from, info, NET_PROTO)
+        elseif msg.type == "send" and type(msg.id) == "string" then
+          local n = tonumber(msg.n) or 1
+          local name = data.names[msg.id] or prettyId(msg.id)
+          if msg.to == "pickup" then queue({ kind = "retrieve", id = msg.id, n = n })
+          else queue({ kind = "tome", id = msg.id, n = n, name = name, player = r.player }) end
+          setStatus("Pocket: sending " .. (n == math.huge and "all" or n) .. " " .. name, CYAN)
+          rednet.send(from, netInfo(r.player), NET_PROTO)
+        elseif msg.type == "dump" then
+          queue({ kind = "dump", player = r.player })
+          setStatus("Pocket: emptying " .. (r.player or "your") .. " inventory into storage...", CYAN)
+          rednet.send(from, netInfo(r.player), NET_PROTO)
+        elseif msg.type == "info" then
+          rednet.send(from, netInfo(r.player), NET_PROTO)
+        end
       end
     end
   end
@@ -1681,18 +1854,19 @@ local function worker()
         end
         scan()
       elseif t.kind == "tome" then
-        busy = "Sending " .. t.name .. " to you..."
-        local n, err = sendToPlayer(t.id, t.n)
+        busy = "Sending " .. t.name .. " to " .. (t.player or "you") .. "..."
+        local n, err = sendToPlayer(t.id, t.n, t.player)
         busy = nil
-        if err then setStatus((n > 0 and ("Gave you " .. commas(n) .. " " .. t.name .. ", then: ") or "Couldn't send: ") .. err, n > 0 and YELLOW or RED)
-        else setStatus("Gave you " .. commas(n) .. " " .. t.name, LIME); if speaker then pcall(speaker.playNote, "pling", 0.8, 18) end end
+        local who = t.player or "you"
+        if err then setStatus((n > 0 and ("Gave " .. who .. " " .. commas(n) .. " " .. t.name .. ", then: ") or "Couldn't send: ") .. err, n > 0 and YELLOW or RED)
+        else setStatus("Gave " .. who .. " " .. commas(n) .. " " .. t.name, LIME); if speaker then pcall(speaker.playNote, "pling", 0.8, 18) end end
         scan()
       elseif t.kind == "dump" then
         busy = "Emptying your inventory into storage..."
-        local n, err = dumpPlayer()
+        local n, err = dumpPlayer(t.player)
         busy = nil
         if err then setStatus("Couldn't empty your inventory: " .. err, RED)
-        else setStatus("Put away " .. commas(n) .. " items from your inventory", LIME) end
+        else setStatus("Put away " .. commas(n) .. " items from " .. (t.player and (t.player .. "'s") or "your") .. " inventory", LIME) end
         scan()
       elseif t.kind == "findcrafter" then
         local id = findCrafter(true)
@@ -1736,7 +1910,7 @@ local function worker()
     elseif now() - lastScan >= CFG.scanEvery then
       lastScan = now()
       scan()
-      if not IM.name or not IM.owner then findIM() end   -- picks up a newly placed manager / memory card
+      findIM()                                         -- picks up new managers / memory cards
       if UI.mode == "recipes" and UI.canMake and R.state == "ready" and R.canSig ~= stats.total .. ":" .. stats.types then
         queue({ kind = "canmake" })
       end
@@ -1789,9 +1963,10 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
+    busy = function() return busy end, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
+math.randomseed(os.epoch("utc") + os.getComputerID() * 7919)
 findIM()
 parallel.waitForAny(ui, worker, netServer, function()
   loadRecipes(); rebuildList()

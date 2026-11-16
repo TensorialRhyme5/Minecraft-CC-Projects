@@ -37,8 +37,8 @@ The recipe book (`storage/recipes.txt`) is downloaded into memory at startup, so
 To rebuild it after a modpack update, see `storage/tools/`.
 
 **Straight to you (Advanced Peripherals Inventory Manager):** wire an Inventory Manager to the storage network
-(it can go anywhere on the network), and put an AP Memory Card bound to you inside. Item pages then get `SEND TO: ME / BARREL`,
-and the main screen gets `PUT AWAY MY INVENTORY` (main inventory only - hotbar, armor and offhand stay).
+(it can go anywhere on the network), and put an AP Memory Card bound to you inside. Each player gets their own Inventory Manager + card.
+Item pages then get `TO: <player> / BARREL`, and the main screen gets `PUT AWAY` buttons per player (main inventory only - hotbar, armor and offhand stay).
 
 **Auto-crafting (crafty turtle):** put a crafty turtle facing the pickup barrel with a full-block wired modem
 touching its back (cabled to the network, right-clicked on). On the turtle:
@@ -60,6 +60,10 @@ reboot
 An advanced pocket computer with a wireless or ender modem. ITEMS tab: search storage (typos OK), send items to you
 or the barrel, put your inventory away. MUSIC tab: now playing, controls, jukebox volume, shuffle a playlist.
 The storage computer and the jukebox need a wireless/ender modem too.
+
+**Pairing (security):** the storage only answers paired remotes. On the storage screen tap `REMOTES`, pick whose
+remote it is, and type the 8-character code on the pocket. Requests are signed with a key made from that code (the
+code itself is never sent), so other people's ender modems can't use your storage. Remove a remote on the same page.
 
 ```
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/pocket/startup.lua startup.lua
