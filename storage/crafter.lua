@@ -13,6 +13,13 @@ local STAGE = { 4, 8, 12, 13, 14, 15, 16 }          -- spare slots used while so
 local isGrid = {}
 for _, s in ipairs(GRID) do isGrid[s] = true end
 
+local function craftFn(n)
+  if turtle.craft then return turtle.craft(n) end
+  local wb = peripheral.find("workbench")
+  if wb and wb.craft then return wb.craft(n) end
+  return false, "no crafting table on this turtle"
+end
+
 local function log(...)
   local t = {}
   for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end
@@ -113,17 +120,36 @@ local function handleJob(job)
     dumpAll()
     return { type = "done", job = job.job, ok = false, err = err }
   end
-  turtle.select(16)
-  local crafted, why = turtle.craft(job.k)
-  local made = 0
-  if crafted then
-    for i = 1, 16 do
-      local d = turtle.getItemDetail(i)
-      if d and d.name == job.out then made = made + d.count end
+  -- craft. Unstackable results (armor, tools) only come out one per call, so keep going
+  -- and empty the result slots into the barrel between calls.
+  local made, done, why = 0, 0, nil
+  local dropped = true
+  while done < job.k do
+    turtle.select(16)
+    local before = 0
+    for _, g in ipairs(GRID) do before = before + turtle.getItemCount(g) end
+    local ok, err = craftFn(job.k - done)
+    if not ok then why = err; break end
+    local after = 0
+    for _, g in ipairs(GRID) do after = after + turtle.getItemCount(g) end
+    local steps = math.max(1, math.floor((before - after) / math.max(1, job.slots or 1) + 0.5))
+    done = done + steps
+    for _, st in ipairs(STAGE) do                  -- move the results out of the way
+      local d = turtle.getItemDetail(st)
+      if d then
+        if d.name == job.out then made = made + d.count end
+        turtle.select(st)
+        if not turtle.drop() then dropped = false end
+      end
     end
+    if after == 0 then break end
   end
-  local dropped = dumpAll()
-  if not crafted then
+  for _, g in ipairs(GRID) do                     -- a last result can land in an emptied grid slot
+    local d = turtle.getItemDetail(g)
+    if d and d.name == job.out and not job.cells[g] then made = made + d.count end
+  end
+  dumpAll()
+  if made == 0 then
     return { type = "done", job = job.job, ok = false, err = "the game rejected the recipe (" .. tostring(why or "no match") .. ")" }
   end
   return { type = "done", job = job.job, ok = true, made = made, full = not dropped }
@@ -139,7 +165,9 @@ for _, side in ipairs(rs.getSides()) do
   if peripheral.getType(side) == "modem" then rednet.open(side); opened = true end
 end
 if not opened then error("No modem touching the turtle. Put a full-block wired modem against it and right-click it.", 0) end
-if not turtle.craft then error("This isn't a crafty turtle - craft it together with a crafting table.", 0) end
+if not turtle.craft and not peripheral.find("workbench") then
+  error("This isn't a crafty turtle - craft it together with a crafting table.", 0)
+end
 rednet.host(PROTO, "crafter_" .. os.getComputerID())
 dumpAll()
 print("Ready. Waiting for the storage computer...")
@@ -151,7 +179,11 @@ while true do
     rednet.send(from, { type = "pong" }, PROTO)
   elseif type(msg) == "table" and msg.type == "craft" then
     log("Crafting " .. msg.k .. "x " .. tostring(msg.out))
-    local reply = handleJob(msg)
+    local okRun, reply = pcall(handleJob, msg)
+    if not okRun then
+      pcall(dumpAll)
+      reply = { type = "done", job = msg.job, ok = false, err = "turtle error: " .. tostring(reply) }
+    end
     log(reply.ok and ("  made " .. reply.made) or ("  failed: " .. reply.err))
     rednet.send(from, reply, PROTO)
   end

@@ -696,7 +696,9 @@ local function autoCraft(t)
       local r, c = math.floor((cell - 1) / 3), (cell - 1) % 3
       cells[r * 4 + c + 1] = R.id[it]
     end
-    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = R.id[t.out] }
+    local nslots = 0
+    for _ in pairs(cells) do nslots = nslots + 1 end
+    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = R.id[t.out], slots = nslots }
     rednet.send(id, job, PROTO)
     local deadline = os.clock() + 20 + k * 0.3
     local reply
