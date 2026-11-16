@@ -963,6 +963,98 @@ local function chainCraft(t)
   return made, err, #steps
 end
 
+-- ---------------------------------------------------------- straight to / from you (Advanced Peripherals Inventory Manager)
+-- The Inventory Manager touches the pickup barrel and holds a Memory Card bound to you.
+-- Sending: items go into the barrel, then the manager moves them into your inventory.
+local IM = { name = nil, dir = nil, owner = nil }
+local IM_DIRS = { "up", "down", "north", "south", "east", "west", "front", "back", "left", "right", "top", "bottom" }
+local function findIM()
+  IM.name = nil
+  for _, n in ipairs(peripheral.getNames()) do
+    local t = (peripheral.getType(n) or ""):lower()
+    if t:find("inventory") and t:find("manager") then IM.name = n; break end
+  end
+  IM.owner = nil
+  if IM.name then
+    local ok, o = pcall(peripheral.call, IM.name, "getOwner")
+    if ok and type(o) == "string" then IM.owner = o end
+  end
+  return IM.name
+end
+-- the manager wants to know which side the barrel is on; learn it once
+local function imCall(method, item)
+  local order = {}
+  if IM.dir then order[1] = IM.dir end
+  for _, d in ipairs(IM_DIRS) do if d ~= IM.dir then order[#order + 1] = d end end
+  local lastErr
+  for _, d in ipairs(order) do
+    local ok, n = pcall(peripheral.call, IM.name, method, d, item)
+    if ok and type(n) == "number" and n > 0 then IM.dir = d; return n end
+    if not ok then lastErr = n end
+  end
+  return 0, lastErr
+end
+
+local function sendToPlayer(key, want)
+  if not IM.name and not findIM() then return 0, "no Inventory Manager on the network" end
+  local e = key:find("#", 1, true) and index[key] or byName[key]
+  if not e or e.count == 0 then return 0, "none in storage" end
+  local name = e.name
+  local total, left = 0, math.min(want, e.count)
+  while left > 0 do
+    local n = retrieve(key, math.min(left, 64 * 9))
+    if n == 0 then return total, total > 0 and nil or "couldn't reach the pickup" end
+    local moved = 0
+    while moved < n do
+      local m, err = imCall("addItemToPlayer", { name = name, count = n - moved })
+      if m == 0 then
+        if not IM.owner then return total + moved, "put a Memory Card bound to you in the Inventory Manager" end
+        return total + moved, err and ("Inventory Manager: " .. tostring(err)) or "your inventory is full - the rest is in the pickup"
+      end
+      moved = moved + m
+    end
+    total, left = total + moved, left - n
+  end
+  return total
+end
+
+-- everything in the pickup goes back into storage
+local function pickupAllToStorage()
+  local pk = currentPickup()
+  if not pk then return end
+  local ok, l = pcall(peripheral.call, pk, "list")
+  if not ok or type(l) ~= "table" then return end
+  for slot, it in pairs(l) do
+    local left, tried, order = it.count, {}, {}
+    local e = byName[it.name]
+    if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
+    for _, n in ipairs(storages) do if not tried[n] then order[#order + 1] = n end end
+    for _, target in ipairs(order) do
+      if left <= 0 then break end
+      local ok2, n = pcall(peripheral.call, pk, "pushItems", target, slot)
+      if ok2 and type(n) == "number" then left = left - n end
+    end
+  end
+end
+
+-- empty your main inventory (not hotbar / armor / offhand) into storage
+local function dumpPlayer()
+  if not IM.name and not findIM() then return 0, "no Inventory Manager on the network" end
+  local ok, list = pcall(peripheral.call, IM.name, "getItems")
+  if not ok or type(list) ~= "table" then return 0, IM.owner and "couldn't read your inventory" or "put a Memory Card bound to you in the Inventory Manager" end
+  local moved, sinceStore = 0, 0
+  for _, it in pairs(list) do
+    local slot = tonumber(it.slot)
+    if slot and slot >= 9 and slot <= 35 and it.name then
+      local n = imCall("removeItemFromPlayer", { name = it.name, count = it.count, fromSlot = slot })
+      moved, sinceStore = moved + n, sinceStore + 1
+      if sinceStore >= 20 then pickupAllToStorage(); sinceStore = 0 end   -- don't overflow the barrel
+    end
+  end
+  pickupAllToStorage()
+  return moved
+end
+
 -- ORGANIZE: gather each item into one "home" chest (the one already holding the most of it),
 -- then merge its partial stacks there so they take as few slots as possible.
 local function organize()
@@ -1302,14 +1394,26 @@ local function drawDetail()
   if #invs > 5 then text(RX1 + 1, 17, "+" .. (#invs - 5) .. " more", GRAY, PANEL) end
   -- retrieve
   local _, kind = currentPickup()
-  text(RX1, 19, "SEND TO PICKUP", YELLOW, PANEL)
-  text(RX1 + 15, 19, kind and (string.char(16) .. " " .. kind) or "(none connected!)", kind == "BACKPACK" and CYAN or (kind and LIME or RED), PANEL)
+  local toMe = IM.name ~= nil and UI.sendMe ~= false
+  if IM.name then
+    text(RX1, 19, "SEND TO", YELLOW, PANEL)
+    button("toMe", RX1 + 9, 19, RX1 + 20, 19, "ME", toMe and BLACK or WHITE, toMe and CYAN or GRAY, function() UI.sendMe = true end)
+    button("toPick", RX1 + 22, 19, RX2, 19, kind or "PICKUP", toMe and WHITE or BLACK, toMe and GRAY or LIME, function() UI.sendMe = false end)
+  else
+    text(RX1, 19, "SEND TO PICKUP", YELLOW, PANEL)
+    text(RX1 + 15, 19, kind and (string.char(16) .. " " .. kind) or "(none connected!)", kind == "BACKPACK" and CYAN or (kind and LIME or RED), PANEL)
+  end
   local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
   for i, a in ipairs(amounts) do
     local x = RX1 + (i - 1) * 10
-    button("get" .. a[1], x, 21, x + 8, 23, a[1], BLACK, LIME, function()
-      queue({ kind = "retrieve", id = id, n = a[2] })
-      setStatus("Sending " .. a[1] .. " " .. name .. "...", LIME)
+    button("get" .. a[1], x, 21, x + 8, 23, a[1], BLACK, toMe and CYAN or LIME, function()
+      if toMe then
+        queue({ kind = "tome", id = id, n = a[2], name = name })
+        setStatus("Sending " .. a[1] .. " " .. name .. " to you...", CYAN)
+      else
+        queue({ kind = "retrieve", id = id, n = a[2] })
+        setStatus("Sending " .. a[1] .. " " .. name .. "...", LIME)
+      end
     end)
   end
   -- alert threshold
@@ -1480,8 +1584,77 @@ local function draw()
   else
     local y = drawKeyboard(6)
     drawAlerts(y + 1)
+    if IM.name then
+      button("dump", RX1, H - 3, RX2, H - 1, "PUT AWAY MY INVENTORY", BLACK, CYAN, function()
+        queue({ kind = "dump" }); setStatus("Emptying your inventory into storage...", CYAN)
+      end)
+    end
   end
   present()
+end
+
+-- ---------------------------------------------------------- pocket remote server
+local NET_PROTO = "storagenet"
+local function searchFor(q, limit)
+  q = (q or ""):lower()
+  local out = {}
+  for id, e in pairs(index) do
+    local name = data.names[id] or prettyId(e.name or id)
+    if q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true) then
+      out[#out + 1] = { id = id, name = name, count = e.count }
+    end
+  end
+  local qw = queryWords(q)
+  if #out < 10 and #q >= 3 and #qw > 0 then              -- typo-friendly, like the monitor
+    local have = {}
+    for _, it in ipairs(out) do have[it.id] = true end
+    for id, e in pairs(index) do
+      if not have[id] then
+        local name = data.names[id] or prettyId(e.name or id)
+        if fuzzyScore(qw, name:lower()) then out[#out + 1] = { id = id, name = name, count = e.count, close = true } end
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if (a.close or false) ~= (b.close or false) then return not a.close end
+    if a.count ~= b.count then return a.count > b.count end
+    return a.name < b.name
+  end)
+  local total = #out
+  while #out > (limit or 60) do table.remove(out) end
+  return out, total
+end
+local function netInfo()
+  return { type = "info", status = status.msg, busy = busy, im = IM.name ~= nil, owner = IM.owner,
+    used = stats.used, slots = stats.slots, total = stats.total, types = stats.types }
+end
+local function netServer()
+  openNet()
+  pcall(rednet.host, NET_PROTO, "storage_" .. os.getComputerID())
+  while true do
+    local from, msg = rednet.receive(NET_PROTO)
+    if type(msg) == "table" then
+      if msg.type == "search" then
+        local res, total = searchFor(msg.q, 60)
+        local info = netInfo()
+        info.type, info.q, info.items, info.found = "results", msg.q, res, total
+        rednet.send(from, info, NET_PROTO)
+      elseif msg.type == "send" and type(msg.id) == "string" then
+        local n = tonumber(msg.n) or 1
+        local name = data.names[msg.id] or prettyId(msg.id)
+        if msg.to == "pickup" then queue({ kind = "retrieve", id = msg.id, n = n })
+        else queue({ kind = "tome", id = msg.id, n = n, name = name }) end
+        setStatus("Pocket: sending " .. (n == math.huge and "all" or n) .. " " .. name, CYAN)
+        rednet.send(from, netInfo(), NET_PROTO)
+      elseif msg.type == "dump" then
+        queue({ kind = "dump" })
+        setStatus("Pocket: emptying your inventory into storage...", CYAN)
+        rednet.send(from, netInfo(), NET_PROTO)
+      elseif msg.type == "info" then
+        rednet.send(from, netInfo(), NET_PROTO)
+      end
+    end
+  end
 end
 
 -- ---------------------------------------------------------- loops
@@ -1522,6 +1695,20 @@ local function worker()
         else
           setStatus("Couldn't send ingredients for " .. t.name, RED)
         end
+        scan()
+      elseif t.kind == "tome" then
+        busy = "Sending " .. t.name .. " to you..."
+        local n, err = sendToPlayer(t.id, t.n)
+        busy = nil
+        if err then setStatus((n > 0 and ("Gave you " .. commas(n) .. " " .. t.name .. ", then: ") or "Couldn't send: ") .. err, n > 0 and YELLOW or RED)
+        else setStatus("Gave you " .. commas(n) .. " " .. t.name, LIME); if speaker then pcall(speaker.playNote, "pling", 0.8, 18) end end
+        scan()
+      elseif t.kind == "dump" then
+        busy = "Emptying your inventory into storage..."
+        local n, err = dumpPlayer()
+        busy = nil
+        if err then setStatus("Couldn't empty your inventory: " .. err, RED)
+        else setStatus("Put away " .. commas(n) .. " items from your inventory", LIME) end
         scan()
       elseif t.kind == "findcrafter" then
         local id = findCrafter(true)
@@ -1565,6 +1752,7 @@ local function worker()
     elseif now() - lastScan >= CFG.scanEvery then
       lastScan = now()
       scan()
+      if not IM.name or not IM.owner then findIM() end   -- picks up a newly placed manager / memory card
       if UI.mode == "recipes" and UI.canMake and R.state == "ready" and R.canSig ~= stats.total .. ":" .. stats.types then
         queue({ kind = "canmake" })
       end
@@ -1620,7 +1808,8 @@ if _G.__JB_TEST then
     busy = function() return busy end, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
-parallel.waitForAny(ui, worker, function()
+findIM()
+parallel.waitForAny(ui, worker, netServer, function()
   loadRecipes(); rebuildList()
   findCrafter(true)
   while true do os.pullEvent("never") end

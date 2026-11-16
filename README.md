@@ -36,6 +36,10 @@ pack's KubeJS changes). Pick one to see the 3x3 grid, what you have and what's m
 The recipe book (`storage/recipes.txt`) is downloaded into memory at startup, so it doesn't use the computer's disk.
 To rebuild it after a modpack update, see `storage/tools/`.
 
+**Straight to you (Advanced Peripherals Inventory Manager):** place an Inventory Manager touching the pickup barrel,
+wire it to the network, and put an AP Memory Card bound to you inside. Item pages then get `SEND TO: ME / BARREL`,
+and the main screen gets `PUT AWAY MY INVENTORY` (main inventory only - hotbar, armor and offhand stay).
+
 **Auto-crafting (crafty turtle):** put a crafty turtle facing the pickup barrel with a full-block wired modem
 touching its back (cabled to the network, right-clicked on). On the turtle:
 
@@ -49,5 +53,15 @@ items land in the barrel (up to 64 crafts per turtle run, big orders run several
 
 ```
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/startup.lua startup.lua
+reboot
+```
+
+## Pocket Remote (`pocket/`)
+An advanced pocket computer with a wireless or ender modem. ITEMS tab: search storage (typos OK), send items to you
+or the barrel, put your inventory away. MUSIC tab: now playing, controls, jukebox volume, shuffle a playlist.
+The storage computer and the jukebox need a wireless/ender modem too.
+
+```
+wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/pocket/startup.lua startup.lua
 reboot
 ```
