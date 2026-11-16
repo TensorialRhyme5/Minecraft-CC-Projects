@@ -343,8 +343,8 @@ end
 local function commasN(n) local s = tostring(math.floor(n or 0)); local r = s:reverse():gsub("(%d%d%d)", "%1,"):reverse(); return (r:gsub("^,", "")) end
 local function wxShort(code, day)
   if code == 0 then return day and "Sunny" or "Clear", day and C.accent or C.text end
-  if code <= 2 then return "Fair", C.dim end
-  if code == 3 then return "Cloud", C.dim end
+  if code <= 2 then return "Partly cloudy", C.dim end
+  if code == 3 then return "Cloudy", C.dim end
   if code == 45 or code == 48 then return "Fog", C.dim end
   if code >= 51 and code <= 57 then return "Rain", C.light end
   if (code >= 61 and code <= 67) or (code >= 80 and code <= 82) then return "Rain", C.light end
@@ -359,76 +359,96 @@ local function drawControl()
     center(10, netOn and "waiting for the jukebox..." or "No modem!", netOn and C.dim or C.bad)
     return
   end
+  local page = UI.cpage or 1
+  -- page buttons along the bottom
+  local function pageBtn(id, x1, x2, label, n)
+    local on = page == n
+    button(id, x1, H, x2, H, label, on and C.bg or C.dim, on and C.cyan or C.panel, function() UI.cpage = n end)
+  end
+  pageBtn("cp1", 1, 13, "WORLD", 1)
+  pageBtn("cp2", 14, W, "BASE", 2)
   local y = 3
-  text(1, y, p.clock .. " " .. p.tz, C.text); text(W - #p.date + 1, y, p.date, C.dim); y = y + 1
-  for _, c in ipairs(p.wx or {}) do
-    text(1, y, fit(c.name, 9), C.light)
-    if c.ok then
-      local label, col = wxShort(c.code, c.day)
-      local temp = math.floor(c.temp + 0.5) .. "\176"
-      text(11, y, temp, C.text)
-      local hl = (c.hi and c.lo) and (math.floor(c.hi + 0.5) .. "/" .. math.floor(c.lo + 0.5)) or ""
-      text(12 + #temp, y, fit(label, W - 12 - #temp - #hl - 1), col)
-      text(W - #hl + 1, y, hl, colors.gray)
-    else text(11, y, "loading...", C.dim) end
+  if page == 1 then
+    text(1, y, "REAL TIME", C.accent); y = y + 1
+    text(2, y, p.clock .. " " .. p.tz, C.text); y = y + 1
+    text(2, y, p.date, C.dim); y = y + 2
+    text(1, y, "WEATHER", C.accent); y = y + 1
+    for _, c in ipairs(p.wx or {}) do
+      text(2, y, c.name, C.light)
+      if c.ok then
+        local label, col = wxShort(c.code, c.day)
+        local temp = math.floor(c.temp + 0.5) .. "\176F"
+        text(W - #temp + 1, y, temp, C.text); y = y + 1
+        text(3, y, fit(label, 12), col)
+        if c.hi and c.lo then
+          local hl = "H" .. math.floor(c.hi + 0.5) .. " L" .. math.floor(c.lo + 0.5)
+          text(W - #hl + 1, y, hl, colors.gray)
+        end
+      else y = y + 1; text(3, y, "loading...", C.dim) end
+      y = y + 1
+    end
     y = y + 1
-  end
-  y = y + 1
-  local g = p.game or {}
-  text(1, y, "MC", C.good); text(4, y, "Day " .. tostring(g.day or "?") .. " " .. tostring(g.time or ""), C.text)
-  if g.hasEnv then
-    local ws, wc = "Clear", C.text
-    if g.thunder then ws, wc = "Storm", C.accent elseif g.rain then ws, wc = "Rain", C.light end
-    text(W - #ws + 1, y, ws, wc)
-  end
-  y = y + 1
-  text(1, y, "TPS", C.good)
-  if p.tps then
-    local tc = p.tps >= 18 and C.good or (p.tps >= 12 and C.accent or C.bad)
-    text(5, y, string.format("%.1f", p.tps) .. (p.tps >= 18 and " smooth" or (p.tps >= 12 and " a bit laggy" or " very laggy")), tc)
-  else text(5, y, "checking...", C.dim) end
-  y = y + 2
-  local list = p.players
-  text(1, y, "ONLINE" .. (list and (" (" .. #list .. ")") or ""), C.light)
-  if list then text(W - 5, y, "\7", C.good); text(W - 3, y, "near", C.dim) end
-  y = y + 1
-  local rows = 4
-  if not p.hasDet then text(1, y, "no Player Detector", C.dim)
-  elseif #list == 0 then text(1, y, "nobody online", C.dim)
+    local g = p.game or {}
+    text(1, y, "MINECRAFT", C.accent); y = y + 1
+    text(2, y, "Day " .. tostring(g.day or "?"), C.text)
+    local gt = tostring(g.time or ""); text(W - #gt + 1, y, gt, C.text); y = y + 1
+    if g.hasEnv then
+      local ws, wc = "Clear", C.text
+      if g.thunder then ws, wc = "Thunderstorm", C.accent elseif g.rain then ws, wc = "Raining", C.light end
+      text(2, y, "Weather", C.dim); text(W - #ws + 1, y, ws, wc); y = y + 1
+    end
+    text(2, y, "Server", C.dim)
+    if p.tps then
+      local tc = p.tps >= 18 and C.good or (p.tps >= 12 and C.accent or C.bad)
+      local ts = string.format("%.1f TPS", p.tps)
+      text(W - #ts + 1, y, ts, tc); y = y + 1
+      local word = p.tps >= 18 and "smooth" or (p.tps >= 12 and "a bit laggy" or "very laggy")
+      text(W - #word + 1, y, word, tc)
+    else text(W - 10, y, "checking...", C.dim) end
   else
-    for i = 1, math.min(#list, rows) do
-      local e = list[i]
-      if i == rows and #list > rows then text(1, y + i - 1, "+" .. (#list - rows + 1) .. " more", C.dim)
-      else
-        text(1, y + i - 1, "\7", e.near and C.good or C.light)
-        text(3, y + i - 1, fit(e.name, W - 2), C.text)
+    local list = p.players
+    text(1, y, "ONLINE" .. (list and (" (" .. #list .. ")") or ""), C.accent)
+    if list then text(W - 10, y, "\7", C.good); text(W - 8, y, "near base", C.dim) end
+    y = y + 1
+    local rows = 6
+    if not p.hasDet then text(2, y, "no Player Detector", C.dim)
+    elseif #list == 0 then text(2, y, "nobody online", C.dim)
+    else
+      for i = 1, math.min(#list, rows) do
+        local e = list[i]
+        if i == rows and #list > rows then text(2, y + i - 1, "+" .. (#list - rows + 1) .. " more", C.dim)
+        else
+          text(2, y + i - 1, "\7", e.near and C.good or C.light)
+          text(4, y + i - 1, fit(e.name, W - 4), C.text)
+        end
       end
     end
-  end
-  y = y + rows + 1
-  local st = p.storage
-  text(1, y, "STORAGE", C.pink)
-  if st then
-    local pct = (st.slots or 0) > 0 and st.used / st.slots or 0
-    local ps = math.floor(pct * 100 + 0.5) .. "%"
-    local bw = W - 9 - #ps
-    local f = math.floor(pct * bw + 0.5)
-    for i = 1, bw do setCell(8 + i, y, " ", C.text, i <= f and (pct > 0.9 and C.bad or (pct > 0.75 and C.accent or C.good)) or colors.gray) end
-    text(W - #ps + 1, y, ps, C.text); y = y + 1
-    text(1, y, fit(commasN(st.total) .. " items " .. commasN(st.types) .. " kinds", W), C.dim); y = y + 1
-    local low = type(st.low) == "table" and st.low or {}
-    if #low > 0 then
-      local parts = {}
-      for _, a in ipairs(low) do parts[#parts + 1] = a.name .. " " .. a.have .. "/" .. a.limit end
-      text(1, y, "Low:", C.bad); text(6, y, fit(table.concat(parts, ", "), W - 5), C.text)
-    else text(1, y, fit(st.busy or st.msg or "", W), st.busy and C.accent or C.text) end
-  else y = y + 1; text(1, y, "storage offline", C.dim); y = y + 1 end
-  y = H
-  if type(p.dev) == "table" then
-    local x = 1
-    for _, d in ipairs({ { "Storage", p.dev.storage }, { "Crafter", p.dev.crafter }, { "Zone", p.dev.zone } }) do
-      text(x, y, "\7", d[2] and C.good or C.bad); text(x + 2, y, d[1], d[2] and C.text or C.dim)
-      x = x + #d[1] + 3
+    y = y + rows + 1
+    local st = p.storage
+    text(1, y, "STORAGE", C.accent)
+    if st then
+      local pct = (st.slots or 0) > 0 and st.used / st.slots or 0
+      local ps = math.floor(pct * 100 + 0.5) .. "% full"
+      text(W - #ps + 1, y, ps, C.text); y = y + 1
+      local bw = W - 2
+      local f = math.floor(pct * bw + 0.5)
+      for i = 1, bw do setCell(1 + i, y, " ", C.text, i <= f and (pct > 0.9 and C.bad or (pct > 0.75 and C.accent or C.good)) or colors.gray) end
+      y = y + 1
+      text(2, y, fit(commasN(st.total) .. " items, " .. commasN(st.types) .. " kinds", W - 1), C.dim); y = y + 1
+      local low = type(st.low) == "table" and st.low or {}
+      if #low > 0 then
+        local parts = {}
+        for _, a in ipairs(low) do parts[#parts + 1] = a.name .. " " .. a.have .. "/" .. a.limit end
+        text(2, y, "Low:", C.bad); text(7, y, fit(table.concat(parts, ", "), W - 6), C.text)
+      else text(2, y, fit(st.busy or st.msg or "", W - 1), st.busy and C.accent or C.text) end
+    else y = y + 1; text(2, y, "storage offline", C.dim) end
+    y = H - 2
+    if type(p.dev) == "table" then
+      local x = 1
+      for _, d in ipairs({ { "Storage", p.dev.storage }, { "Crafter", p.dev.crafter }, { "Zone", p.dev.zone } }) do
+        text(x, y, "\7", d[2] and C.good or C.bad); text(x + 2, y, d[1], d[2] and C.text or C.dim)
+        x = x + #d[1] + 3
+      end
     end
   end
 end
@@ -491,6 +511,8 @@ local function main()
         if b >= h.x1 and b <= h.x2 and c >= h.y1 and c <= h.y2 then flash[h.id] = t; h.fn(b, c); break end
       end
       draw(t)
+    elseif ev == "mouse_scroll" and UI.tab == "control" then
+      UI.cpage = a > 0 and 2 or 1; draw(t)
     elseif ev == "mouse_scroll" and UI.tab == "items" and not UI.sel then
       UI.page = math.max(1, UI.page + a); search(); draw(t)
     elseif ev == "char" and UI.tab == "items" and not PAIRED then
