@@ -551,7 +551,7 @@ do
       if ok and type(l) == "table" then
         if l[3] then storeFrom(f.name, 3, l[3].name, l[3].count) end      -- finished items back to storage
         local inp = l[1]
-        f.cur = inp and inp.name or nil
+        f.cur, f.n = inp and inp.name or nil, inp and inp.count or 0
         local job
         for _, j in ipairs(SM.jobs) do
           if j.left > 0 and ((inp and j.id == inp.name) or (not inp and fits(f, j))) then job = j; break end
@@ -563,7 +563,7 @@ do
           local room = 64 - (inp and inp.count or 0)
           local n = room > 0 and pullInto(f.name, 1, job.id, math.min(room, job.left)) or 0
           job.left = job.left - n
-          if n > 0 then f.cur = job.id
+          if n > 0 then f.cur = job.id; f.n = (f.n or 0) + n
           elseif not inp and (not byName[job.id] or byName[job.id].count <= 0) then job.left, job.short = 0, true end
         end
         if f.cur then                                                     -- keep it fuelled while it has work
@@ -588,6 +588,41 @@ do
       end
     end
   end
+  -- time estimates: a furnace smelts one item every 10 s, a blast furnace every 5 s
+  local function rate(rc)
+    local r = 0
+    for _, f in ipairs(SM.furnaces) do
+      if f.blast and rc.b then r = r + 0.2 elseif not f.blast and rc.f then r = r + 0.1 end
+    end
+    return r
+  end
+  local function fmtTime(sec)
+    sec = math.ceil(sec)
+    if sec < 60 then return sec .. "s" end
+    if sec < 3600 then local m = math.floor(sec / 60); local r = sec % 60; return m .. "m" .. (r > 0 and (" " .. r .. "s") or "") end
+    local h = math.floor(sec / 3600); return h .. "h " .. math.floor((sec % 3600) / 60) .. "m"
+  end
+  SM.fmtTime = fmtTime
+  function SM.eta(count, rc)                         -- seconds for `count` items, or nil if nothing can smelt it
+    local r = rc and rate(rc) or 0
+    if r <= 0 then return nil end
+    return count / r
+  end
+  function SM.etaLeft()                              -- seconds until everything queued is done
+    -- jobs run side by side, so: all the work shared over every furnace that can help,
+    -- but never less than the slowest single job on the furnaces that can do it
+    local items, slowest, any = 0, 0, { b = false, f = false }
+    for _, j in ipairs(SM.jobs) do
+      local n = math.max(0, j.left)
+      for _, f in ipairs(SM.furnaces) do if f.cur == j.id then n = n + (f.n or 0) end end
+      items = items + n
+      local t = SM.eta(n, j)
+      if t and t > slowest then slowest = t end
+      any.b, any.f = any.b or j.b, any.f or j.f
+    end
+    local shared = SM.eta(items, any) or 0
+    return math.max(shared, slowest)
+  end
   function SM.status()
     if #SM.furnaces == 0 then return nil end
     local busyN, left = 0, 0
@@ -595,8 +630,9 @@ do
     for _, j in ipairs(SM.jobs) do left = left + j.left end
     if busyN == 0 and #SM.jobs == 0 then return nil end
     local j = SM.jobs[1]
-    return "Smelting" .. (j and (" " .. nameOf(j.id)) or "") .. " - " .. busyN .. "/" .. #SM.furnaces .. " furnaces busy" ..
-      (left > 0 and (", " .. commas(left) .. " waiting") or "") .. (SM.noFuel and "  (NO FUEL!)" or "")
+    local eta = SM.etaLeft()
+    return "Smelting" .. (j and (" " .. nameOf(j.id)) or "") .. " - " .. busyN .. "/" .. #SM.furnaces .. " furnaces" ..
+      (eta > 0 and (", ~" .. fmtTime(eta) .. " left") or "") .. (SM.noFuel and "  (NO FUEL!)" or "")
   end
   -- a crafting-chain step that needs smelting: send what the recipe needs, wait for it
   function SM.run(st, show)
@@ -616,7 +652,7 @@ do
       local done, left = true, 0
       for _, j in ipairs(mine) do if not j.done then done = false end; left = left + math.max(0, j.left) end
       if done then break end
-      if show then show("Smelting " .. commas(total) .. " for " .. nameOf(R.id[st.rc.out]) .. "  (" .. commas(left) .. " waiting)") end
+      if show then show("Smelting " .. commas(total) .. " for " .. nameOf(R.id[st.rc.out]) .. "  ~" .. fmtTime(SM.etaLeft()) .. " left") end
       if now() > limit then return 0, "smelting took too long (fuel?)" end
       sleep(1)
     end
@@ -678,7 +714,10 @@ do
       text(RX1, y, fit(commas(SM.asks[id]) .. "x " .. nameOf(id), RX2 - RX1 + 1), WHITE)
       local outName = rc and R.name[rc.out] or "?"
       local how = (rc and rc.b) and (rc.f and "furnace or blast" or "blast furnace") or "furnace"
-      text(RX1 + 1, y + 1, fit("\26 " .. outName .. "  (" .. how .. ")", RX2 - RX1), LGRAY)
+      local eta = rc and SM.eta(SM.asks[id], rc)
+      local ts = eta and ("~" .. fmtTime(eta)) or "no furnace for it"
+      text(RX1 + 1, y + 1, fit("\26 " .. outName .. "  (" .. how .. ")", RX2 - RX1 - #ts - 1), LGRAY)
+      text(RX2 - #ts + 1, y + 1, ts, eta and CYAN or RED)
       local bx = RX1
       local function b(label, bg, fg, fn) button("sm" .. label .. id, bx, y + 2, bx + bw - 1, y + 2, label, fg, bg, fn); bx = bx + bw + 1 end
       b("SMELT", LIME, BLACK, function() SM.once[id] = "smelt"; os.queueEvent("storage_task") end)
