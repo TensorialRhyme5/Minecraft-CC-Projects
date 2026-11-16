@@ -152,8 +152,9 @@ local function sendPair()
   if #code ~= 8 then UI.pairMsg = "The code has 8 letters/numbers"; return end
   local dev = os.getComputerID()
   local nonce = tostring(math.random(1, 2 ^ 30)) .. tostring(os.epoch("utc"))
-  UI.pairing = code
-  UI.pairMsg = "Pairing..."
+  if not netOn then UI.pairMsg = "Failed: no modem in this pocket"; return end
+  UI.pairing, UI.pairAt, UI.pairTries = code, now(), (UI.pairTries or 0) + 1
+  UI.pairMsg = "Pairing..." .. (UI.pairTries > 1 and (" (try " .. UI.pairTries .. ")") or "")
   local msg = { type = "pair", dev = dev, nonce = nonce, proof = sha256(code .. "|pair|" .. dev .. "|" .. nonce) }
   if S.id then rednet.send(S.id, msg, STORE_PROTO) else rednet.broadcast(msg, STORE_PROTO) end
 end
@@ -191,9 +192,11 @@ local function drawPairing()
   local shown = UI.code:upper()
   shown = (shown:sub(1, 4) .. (#shown > 4 and ("-" .. shown:sub(5)) or "")) .. (#shown < 8 and "_" or "")
   center(11, shown, C.accent, C.panel)
-  button("pairgo", 4, 14, W - 3, 16, "PAIR", C.bg, #UI.code == 8 and C.good or C.panel, sendPair)
+  button("pairgo", 4, 14, W - 3, 16, "PAIR", C.bg, #UI.code == 8 and C.good or C.panel, function() UI.pairTries = 0; sendPair() end)
   if UI.pairMsg then center(18, fit(UI.pairMsg, W), UI.pairMsg:find("ail") and C.bad or C.dim) end
-  if not S.id then center(H, "(looking for storage...)", C.panel) end
+  if UI.pairMsg == "Failed: no reply" then center(19, "too far? use ender modem", C.dim) end
+  if not netOn then center(H, "No modem in this pocket", C.bad)
+  elseif not S.id then center(H, "(looking for storage...)", C.panel) end
 end
 
 local function drawItems()
@@ -363,6 +366,15 @@ local function main()
     local t = now()
     if ev == "terminate" then return
     elseif ev == "timer" and a == timer then
+      -- no answer to a pairing request: try again (asking everyone), then say why
+      if UI.pairing and t - (UI.pairAt or t) > 3 then
+        if UI.pairTries < 3 then S.id = nil; sendPair()
+        else
+          UI.pairing, UI.pairTries = nil, 0
+          UI.pairMsg = "Failed: no reply"
+        end
+        draw(t)
+      end
       if not S.id and t - S.lookAt > 5 then findStorage(); if S.id then search() end end
       if UI.searchAt > 0 and t >= UI.searchAt then search() end
       if S.id and UI.tab == "items" and t - lastInfo > ((S.info and S.info.busy) and 1 or 5) then
@@ -384,7 +396,7 @@ local function main()
       if a:match("[%w]") and #UI.code < 8 then UI.code = UI.code .. a:upper() end
       draw(t)
     elseif ev == "key" and UI.tab == "items" and not PAIRED then
-      if a == keys.backspace then UI.code = UI.code:sub(1, -2) elseif a == keys.enter then sendPair() end
+      if a == keys.backspace then UI.code = UI.code:sub(1, -2) elseif a == keys.enter then UI.pairTries = 0; sendPair() end
       draw(t)
     elseif ev == "char" and UI.tab == "items" then
       UI.q = UI.q .. a; UI.page = 1; UI.sel = nil; UI.searchAt = t + 0.35; draw(t)
@@ -399,9 +411,10 @@ local function main()
         if msg.ok and UI.pairing then
           PAIRED = { key = sha256(UI.pairing .. "|key|" .. os.getComputerID()), player = msg.player }
           local f = fs.open(KEYFILE, "w"); f.write(textutils.serialize(PAIRED)); f.close()
-          S.id, UI.code, UI.pairing, UI.pairMsg = a, "", nil, nil
+          S.id, UI.code, UI.pairing, UI.pairMsg, UI.pairTries = a, "", nil, nil, 0
           search()
         else
+          UI.pairing, UI.pairTries = nil, 0
           UI.pairMsg = "Pairing failed: " .. tostring(msg.why or "?")
         end
       elseif c == STORE_PROTO and type(msg) == "table" and msg.type == "denied" then
