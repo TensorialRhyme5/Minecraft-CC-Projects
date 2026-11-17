@@ -400,8 +400,41 @@ local function groupItems(g)
     end
     R.grpMem[g] = m
   end
-  return m
+  local w = R.jobWood
+  if w == nil then w = R.wood end
+  if not w then return m end
+  return R.woodFilter(g, m, w)
 end
+-- wood choice on the recipe page: a slot that takes several kinds of wood only takes the chosen one
+function R.woodOf(id)
+  local n = (id or ""):match(":(.+)$") or ""
+  local at = n:match("@(.+)$")
+  if at then return at end
+  n = n:gsub("^stripped_", "")
+  return n:match("^(.+)_planks$") or n:match("^(.+)_log$") or n:match("^(.+)_wood$") or n:match("^(.+)_stem$") or n:match("^(.+)_hyphae$")
+end
+function R.woodsIn(m)                             -- the kinds of wood a slot accepts
+  local woods, n = {}, 0
+  for _, it in ipairs(m) do
+    local x = R.woodOf(R.id[it])
+    if x and not woods[x] then woods[x] = true; n = n + 1 end
+  end
+  return woods, n
+end
+function R.woodFilter(g, m, w)
+  R.wfMem = R.wfMem or {}
+  local key = g .. "|" .. w
+  if R.wfMem[key] then return R.wfMem[key] end
+  local _, n = R.woodsIn(m)
+  local out = m
+  if n >= 2 then
+    out = {}
+    for _, it in ipairs(m) do if R.woodOf(R.id[it]) == w then out[#out + 1] = it end end
+  end
+  R.wfMem[key] = out
+  return out
+end
+function R.woodKey() local w = R.jobWood; if w == nil then w = R.wood end return w or "" end
 local function groupLabel(g)                      -- a real item name for a slot (vanilla first), else the tag
   local items = groupItems(g)
   local pick
@@ -1696,7 +1729,7 @@ local function commit(from, to) for k, v in pairs(from) do to[k] = v end end
 local shortMemo = {}
 local function directShort(rc)
   local m = shortMemo[rc]
-  if not m or m.scan ~= stats.scanned then m = { scan = stats.scanned, v = craftPlan(rc, 1).short }; shortMemo[rc] = m end
+  if not m or m.scan ~= stats.scanned or m.w ~= R.woodKey() then m = { scan = stats.scanned, w = R.woodKey(), v = craftPlan(rc, 1).short }; shortMemo[rc] = m end
   return m.v
 end
 -- recipes for an item, the ones closest to craftable first
@@ -1801,9 +1834,9 @@ end
 -- can the shortfall for this one slot be crafted from what's in storage?
 local slotCache = {}
 local function slotCraftable(g, short, out)
-  local key = g .. ":" .. short .. ":" .. tostring(stats.scanned)
+  local key = g .. ":" .. short .. ":" .. tostring(stats.scanned) .. R.woodKey()
   if slotCache[key] == nil then
-    if not next(slotCache) or slotCache._scan ~= stats.scanned then slotCache = { _scan = stats.scanned } end
+    if not next(slotCache) or slotCache._scan ~= stats.scanned .. R.woodKey() then slotCache = { _scan = stats.scanned .. R.woodKey() } end
     local okp = false
     for d = 1, CHAIN_DEPTH do
       if planMake(g, short, child(BASE), 0, { [out or -1] = true }, { n = CHAIN_BUDGET, max = d }) then okp = true; break end
@@ -2147,7 +2180,7 @@ local function openRecipe(o, fromCurrent, crafts)
     UI.rhist = UI.rhist or {}
     UI.rhist[#UI.rhist + 1] = { o = UI.rsel, rvar = UI.rvar, crafts = UI.crafts, rlist = UI.rlist }
     if #UI.rhist > 20 then table.remove(UI.rhist, 1) end
-  elseif not fromCurrent then UI.rhist = {} end
+  elseif not fromCurrent then UI.rhist = {}; if R.wood then R.wood = nil; R.ready = {} end end
   UI.rsel, UI.rvar, UI.crafts, UI.rlist = o, 1, math.max(1, crafts or 1), rankRecipes(o)
 end
 local function goBack()
@@ -2383,6 +2416,7 @@ local function drawDetail()
   local ri = R.byId[e and e.name or id]
   if R.state == "ready" and ri and R.byOut[ri] then
     button("showrec", RX1, 31, RX2, 33, "SHOW RECIPE", BLACK, PURPLE, function()
+      if R.wood then R.wood = nil; R.ready = {} end
       UI.mode = "recipes"; UI.selected = nil; UI.rhist = {}; UI.rsel = ri; UI.rvar = 1; UI.crafts = 1; UI.rlist = rankRecipes(ri)
       rebuildList()
     end)
@@ -2511,6 +2545,37 @@ local function drawRecipe()
       hit("cell" .. cell, cx, cy, cx + CW - 1, cy + CH - 1, function() drillInto(g, shown, short) end)
     end
   end
+  -- wood picker (only when a slot takes more than one kind of wood)
+  do
+    local opts, have = {}, {}
+    for _, g in ipairs(slots) do
+      if g and g > 0 then
+        groupItems(g)
+        local base = R.grpMem[g] or {}
+        local woods, n = R.woodsIn(base)
+        if n >= 2 then
+          for wd in pairs(woods) do have[wd] = have[wd] or 0 end
+          for _, it in ipairs(base) do local wd = R.woodOf(R.id[it]); if wd then have[wd] = have[wd] + stock(it) end end
+        end
+      end
+    end
+    for wd in pairs(have) do opts[#opts + 1] = wd end
+    if #opts > 0 then
+      table.sort(opts, function(a, b) if have[a] ~= have[b] then return have[a] > have[b] end return a < b end)
+      local wx = gx + 3 * CW + 4
+      local cur = R.wood
+      local lbl = cur and prettyId(cur) or "ANY"
+      text(wx, gy, "WOOD", LGRAY, PANEL)
+      button("wood", wx, gy + 1, RX2, gy + 2, fit(lbl, RX2 - wx), BLACK, cur and ORANGE or LGRAY, function()
+        local nxt
+        if not cur then nxt = opts[1] else
+          for i, wd in ipairs(opts) do if wd == cur then nxt = opts[i + 1]; break end end
+        end
+        R.wood = nxt; R.ready = {}
+      end)
+      if cur and (have[cur] or 0) == 0 then text(wx, gy + 3, "none here", GRAY, PANEL) end
+    end
+  end
   -- arrow + result slot
   local midY = gy + CH + 1 + math.floor(CH / 2)
   text(gx + 3 * CW + 4, midY - 1, "\140\140" .. string.char(16), YELLOW, PANEL)
@@ -2567,8 +2632,8 @@ local function drawRecipe()
   button("autocraft", RX1, H - 3, RX1 + 11, H - 1, "CRAFT", BLACK, canAuto and (short > 0 and GREEN or CYAN) or GRAY, function()
     if busy then return end
     if not chainOk then setStatus("Missing ingredients you can't craft yet - tap the red slots to see why", RED); return end
-    queue({ kind = "autocraft", rc = rc, out = o, crafts = UI.crafts, name = itemName(o) })
-    setStatus("Crafting " .. UI.crafts .. "x " .. itemName(o) .. "...", CYAN)
+    queue({ kind = "autocraft", rc = rc, out = o, crafts = UI.crafts, name = itemName(o), wood = R.wood })
+    setStatus("Crafting " .. UI.crafts .. "x " .. itemName(o) .. (R.wood and (" (" .. prettyId(R.wood) .. ")") or "") .. "...", CYAN)
   end)
   button("craftsend", RX1 + 13, H - 3, RX2 - 13, H - 1, label, BLACK, col, function()
     if #plan.take == 0 then setStatus("You don't have any of the ingredients", RED); return end
@@ -2738,14 +2803,17 @@ local function worker()
         setStatus("Organized! " .. commas(moves) .. " moves, freed " .. commas(math.max(0, freed)) .. " slots", LIME)
         if speaker then pcall(speaker.playNote, "chime", 1, 12) end
       elseif t.kind == "autocraft" then
-        local made, err, parts = chainCraft(t)
+        R.jobWood = t.wood or false                                  -- the wood picked on the recipe page
+        local okc, made, err, parts = pcall(chainCraft, t)
+        R.jobWood = nil; R.ready = {}
+        if not okc then made, err = 0, tostring(made) end
         busy = nil
         SM.learnDouble(R.id[t.out], currentPickup())
         if err and not t.retried and (err:find("couldn't take enough", 1, true) or err:find("ran out of", 1, true)) and made < t.crafts then
           -- a step came up short (its ingredients are back in storage): plan again from the real counts, once
           scan()
           setStatus("Came up short (" .. err .. ") - planning again and retrying " .. t.name .. "...", YELLOW)
-          queue({ kind = "autocraft", rc = t.rc, out = t.out, crafts = t.crafts - made, name = t.name, retried = true, before = made })
+          queue({ kind = "autocraft", rc = t.rc, out = t.out, crafts = t.crafts - made, name = t.name, retried = true, before = made, wood = t.wood })
         elseif err then
           made = made + (t.before or 0)
           setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err .. (t.retried and " (even after a retry)" or ""), made > 0 and YELLOW or RED)
