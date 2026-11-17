@@ -2882,7 +2882,7 @@ local function statusLoop()
   while true do
     sleep(5)
     HIST.tick(stats)
-    if openNet() then
+    if openNet() and CFG.title ~= "MINE" then                -- (the mine storage keeps quiet: home is the one on the panels)
       if now() - lastCrafterCheck > 60 then lastCrafterCheck = now(); findCrafter(true) end
       local low = {}
       for id, limit in pairs(data.alerts) do
