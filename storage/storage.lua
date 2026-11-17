@@ -763,6 +763,19 @@ do
           end
         end
   end
+  -- why an ingredient couldn't all go into the pickup: a really full barrel, or not enough in storage
+  function SM.whyShort(id, pk)
+    if pk then
+      local ok, l = pcall(peripheral.call, pk, "list")
+      local ok2, size = pcall(peripheral.call, pk, "size")
+      if ok and ok2 and type(l) == "table" and type(size) == "number" then
+        local used = 0
+        for _ in pairs(l) do used = used + 1 end
+        if used >= size then return "the pickup is full - empty it and try again" end
+      end
+    end
+    return "couldn't take enough " .. nameOf(id) .. " out of storage"
+  end
   -- ---------------------------------------------------------- TRASH: droppers over lava + a Redstone Relay
   -- The items go into the droppers (any number of them, facing down into lava) and the relay pulses
   -- all its sides, so every dropper touching it throws one item per pulse.
@@ -1435,8 +1448,7 @@ local function retrieve(id, want)
   for _, l in ipairs(e.locs) do
     if moved >= want then break end
     local ok, n = pcall(peripheral.call, l.inv, "pushItems", target, l.slot, math.min(want - moved, l.count))
-    if ok and type(n) == "number" then moved = moved + n end
-    if ok and n == 0 then break end                             -- pickup barrel is full
+    if ok and type(n) == "number" then moved = moved + n end    -- (0 can just mean this spot is out of date: keep going)
   end
   return moved
 end
@@ -1549,7 +1561,8 @@ local function autoCraft(t)
     for it, n in pairs(used) do
       local got = retrieve(R.id[it], n)
       need[SM.realId(R.id[it])] = (need[SM.realId(R.id[it])] or 0) + n
-      if got < n then return made, "pickup is full" end
+      if got < n then sleep(0.1); scan(); got = got + retrieve(R.id[it], n - got) end   -- counts were out of date: once more
+      if got < n then return made, SM.whyShort(R.id[it], currentPickup()) end
     end
     if not arrangePickup(pk, need) then return made, "pickup is too full to sort" end
     jobCounter = jobCounter + 1
