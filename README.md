@@ -93,3 +93,9 @@ right-click it so it turns red). They're never used as storage.
   (like an Iron Furnaces Heater) is left alone.
 - **Crafting uses it too:** if a recipe needs something that has to be smelted first (stone for stone bricks, glass for
   panes...), the ingredient shows green and CRAFT smelts it as one of the steps.
+
+## Sophisticated Storage wood types
+
+Sophisticated chests and barrels (and their copper / iron / gold / diamond tiers, and limited barrels) are listed per
+wood: "Spruce Chest", "Spruce Iron Chest", "Oak Barrel"... Upgrades keep their wood, so CRAFT on "Spruce Iron Chest"
+only ever uses a spruce chest. The storage reads each chest's wood from its in-game name the first time it sees it.

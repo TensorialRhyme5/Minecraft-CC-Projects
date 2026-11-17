@@ -102,6 +102,8 @@ def pretty(i):
     if i.endswith('@double'):
         return 'Double ' + pretty(i[:-len('@double')])
     n = names.get(i)
+    if n is None and '@' in i:
+        return pretty(i.split('@')[0])
     if n and '%' in n: n = n.replace('%s', '').strip()     # e.g. Sophisticated Storage's "%s%sIron Chest"
     if n and '%' not in n: return n
     return ' '.join(w.capitalize() for w in i.split(':')[1].replace('/', ' ').split('_'))

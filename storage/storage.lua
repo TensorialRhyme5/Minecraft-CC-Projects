@@ -89,7 +89,7 @@ local function fit(s, w) if #s > w then return s:sub(1, math.max(1, w - 1)) .. "
 
 -- ---------------------------------------------------------- saved settings (alerts + item names)
 local SAVE = "storage_data.txt"
-local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {}, dbl = {} }
+local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {}, dbl = {}, woodOf = {} }
 if fs.exists(SAVE) then
   local f = fs.open(SAVE, "r")
   local ok, d = pcall(textutils.unserialize, f.readAll())
@@ -101,6 +101,8 @@ if fs.exists(SAVE) then
     data.sort = d.sort == "name" and "name" or "count"
     data.smeltRule = type(d.smeltRule) == "table" and d.smeltRule or {}
     data.dbl = type(d.dbl) == "table" and d.dbl or {}
+    data.woodOf = type(d.woodOf) == "table" and d.woodOf or {}
+    for k, v in pairs(data.woodOf) do if v == false then data.woodOf[k] = nil end end   -- unfinished lookups: try again
   end
 end
 local dirty = false
@@ -518,7 +520,52 @@ do
   local function nameOf(id) return data.names[id] or (R.byId[id] and R.name[R.byId[id]]) or prettyId(id) end
   SM.nameOf = nameOf
   -- "double" versions (id@double) are the same item id with a hidden marker: the turtle crafts the real id
-  function SM.realId(id) return (id or ""):gsub("@double$", "") end
+  function SM.realId(id) return ((id or ""):gsub("@[%w_]+$", "")) end
+  -- Sophisticated chests/barrels: same item id for every wood type. The wood is read once from the item's
+  -- name ("Spruce Iron Chest") and remembered, so each wood gets its own count (id@spruce) for crafting.
+  local WOOD_NAMES = { { "Dark Oak", "dark_oak" }, { "Oak", "oak" }, { "Spruce", "spruce" }, { "Birch", "birch" },
+    { "Jungle", "jungle" }, { "Acacia", "acacia" }, { "Mangrove", "mangrove" }, { "Cherry", "cherry" },
+    { "Bamboo", "bamboo" }, { "Crimson", "crimson" }, { "Warped", "warped" } }
+  local function isWoodItem(n)
+    return n:find("^sophisticatedstorage:") and (n:find("chest$") or n:find("barrel$") or n:find("barrel_%d$")) and not n:find("shulker")
+  end
+  local function woodCacheKey(it) return it.name .. "#" .. (it.nbt or "") end
+  -- which group an item counts under: a learned double, its wood version, or just its id
+  function SM.groupKey(it)
+    if it.nbt and data.dbl[it.name .. "#" .. it.nbt] then return data.dbl[it.name .. "#" .. it.nbt] end
+    local w = isWoodItem(it.name) and data.woodOf[woodCacheKey(it)]
+    if w and w ~= "" then return it.name .. "@" .. w end
+    return it.name
+  end
+  -- look up the wood of any chest/barrel we haven't seen before (one detail call each, then cached)
+  function SM.learnWoods(lists, invs)
+    local jobs = {}
+    for i, name in ipairs(invs) do
+      for slot, it in pairs(lists[i] or {}) do
+        local key = woodCacheKey(it)
+        if isWoodItem(it.name) and data.woodOf[key] == nil then
+          data.woodOf[key] = false                                   -- (being looked up)
+          jobs[#jobs + 1] = function()
+            local ok, d = pcall(peripheral.call, name, "getItemDetail", slot)
+            local w = ""
+            if ok and type(d) == "table" and type(d.displayName) == "string" then
+              for _, wn in ipairs(WOOD_NAMES) do
+                if d.displayName:sub(1, #wn[1] + 1) == wn[1] .. " " then w = wn[2]; break end
+              end
+              if it.nbt then data.names[it.name .. "#" .. it.nbt] = d.displayName end
+            end
+            data.woodOf[key] = w
+            dirty = true
+          end
+        end
+      end
+    end
+    for i = 1, #jobs, 16 do
+      local batch = {}
+      for k = i, math.min(#jobs, i + 15) do batch[#batch + 1] = jobs[k] end
+      parallel.waitForAll(table.unpack(batch))
+    end
+  end
   -- detail-page button: tell the storage this Sophisticated chest is a double (CC can't see the marker itself)
   function SM.doubleButton(key, x1, y, x2)
     local real = key:match("^(sophisticatedstorage:[%w_]*chest)#.+$")
@@ -1046,6 +1093,7 @@ local function scan()
     end
     for k = 1, #fetch, 64 do parallel.waitForAll(table.unpack(fetch, k, math.min(#fetch, k + 63))) end
   end
+  SM.learnWoods(lists, storages)
   local newIndex, newByName, seen = {}, {}, {}
   local slots, used, total = 0, 0, 0
   for i, name in ipairs(storages) do
@@ -1067,10 +1115,9 @@ local function scan()
       e.count = e.count + it.count
       local loc = { inv = name, slot = slot, count = it.count, plain = key == it.name }
       e.locs[#e.locs + 1] = loc
-      local b = newByName[(it.nbt and data.dbl[it.name .. "#" .. it.nbt]) or it.name]
+      local b = newByName[SM.groupKey(it)]
       if not b then
-        local bn = (it.nbt and data.dbl[it.name .. "#" .. it.nbt]) or it.name
-        b = { id = bn, name = bn, count = 0, locs = {} }; newByName[bn] = b
+        b = { id = SM.groupKey(it), name = SM.groupKey(it), count = 0, locs = {} }; newByName[b.id] = b
       end
       b.count = b.count + it.count
       b.locs[#b.locs + 1] = loc
@@ -1258,7 +1305,7 @@ local function autoCraft(t)
     local need = {}
     for it, n in pairs(used) do
       local got = retrieve(R.id[it], n)
-      need[R.id[it]] = n
+      need[SM.realId(R.id[it])] = (need[SM.realId(R.id[it])] or 0) + n
       if got < n then return made, "pickup is full" end
     end
     if not arrangePickup(pk, need) then return made, "pickup is too full to sort" end

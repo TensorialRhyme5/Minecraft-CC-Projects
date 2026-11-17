@@ -157,6 +157,12 @@ def norm_ing(x):
     return None
 
 
+def result_wood(r):
+    if isinstance(r, dict) and isinstance(r.get('components'), dict):
+        return r['components'].get('sophisticatedstorage:wood_type')
+    return None
+
+
 def norm_result(r):
     if isinstance(r, str):
         return r, 1
@@ -173,7 +179,7 @@ def norm_result(r):
 CRAFT_TYPES = {
     'mekanism:mek_data', 'mekanismtools:paxel',
     'sophisticatedcore:upgrade_next_tier', 'sophisticatedstorage:storage_tier_upgrade',
-    'sophisticatedstorage:double_chest_tier_upgrade', 'sophisticatedstorage:generic_wood_storage',
+    'sophisticatedstorage:double_chest_tier_upgrade',
     'sophisticatedstorage:shulker_box_from_chest', 'sophisticatedstorageinmotion:moving_storage_from_storage',
     'sophisticatedbackpacks:backpack_upgrade', 'functionalstorage:copy_components', 'actuallyadditions:copy_nbt',
     'immersiveengineering:turn_and_copy', 'fluxnetworks:flux_storage_recipe', 'ars_nouveau:book_upgrade',
@@ -219,7 +225,7 @@ def parse_recipe(rid, j):
             for gi, cell in enumerate(grid):
                 if cell and len(cell) == 1 and re.match(r'^sophisticatedstorage:([a-z_]*_)?chest$', cell[0]):
                     DOUBLES.add(cell[0]); grid[gi] = [cell[0] + '@double']
-        return {'id': rid, 'k': 's', 'out': out, 'n': n, 'g': grid}
+        return {'id': rid, 'k': 's', 'out': out, 'n': n, 'g': grid, 'wood': result_wood(j.get('result'))}
     if 'ingredients' in j:
         ings = []
         for i in j['ingredients']:
@@ -229,7 +235,7 @@ def parse_recipe(rid, j):
             ings.append(o)
         if not ings or len(ings) > 9:
             return None
-        return {'id': rid, 'k': 'l', 'out': out, 'n': n, 'i': ings}
+        return {'id': rid, 'k': 'l', 'out': out, 'n': n, 'i': ings, 'wood': result_wood(j.get('result'))}
     return None
 
 
@@ -290,6 +296,54 @@ def load_tree(read, names_list):
             recipes.pop(rid, None)  # an override that is no longer a crafting recipe
 
 
+# ---- Sophisticated Storage chests and barrels come in wood types (same item id, different look).
+# Give every wood its own entry ("sophisticatedstorage:iron_chest@spruce") so upgrades keep their wood.
+WOODS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'bamboo', 'crimson', 'warped']
+WOOD_ITEM = re.compile(r'^sophisticatedstorage:((copper|iron|gold|diamond|netherite)_)?(chest|barrel)$'
+                       r'|^sophisticatedstorage:limited_((copper|iron|gold|diamond|netherite)_)?barrel_[1-4]$')
+
+
+def split_by_wood():
+    def cells(r):
+        return r['g'] if r['k'] == 's' else r['i'] if r['k'] == 'l' else [r['c']]
+    def set_cells(r, c):
+        if r['k'] == 's': r['g'] = c
+        elif r['k'] == 'l': r['i'] = c
+        else: r['c'] = c[0]
+    def woody(cell):
+        return cell and any(WOOD_ITEM.match(o) for o in cell)
+    new = {}
+    for rid, r in list(recipes.items()):
+        out = r['out']
+        if WOOD_ITEM.match(out) and r.get('wood'):            # made from planks: its wood is known
+            r['out'] = out + '@' + r['wood']
+            new[rid] = r
+        elif WOOD_ITEM.match(out):                             # an upgrade: one copy per wood, keeping it
+            if not any(woody(c) for c in cells(r)):
+                continue                                       # no wood item to carry over: leave it out
+            for w in WOODS:
+                c2 = [([o + '@' + w if WOOD_ITEM.match(o) else o for o in c] if c else c) for c in cells(r)]
+                r2 = dict(r); r2['out'] = out + '@' + w; set_cells(r2, c2)
+                new[rid + '@' + w] = r2
+        else:                                                  # uses one as an ingredient: any wood will do
+            if any(woody(c) for c in cells(r)):
+                c2 = []
+                for c in cells(r):
+                    if c and woody(c):
+                        c = [o2 for o in c for o2 in ([o + '@' + w for w in WOODS] if WOOD_ITEM.match(o) else [o])]
+                    c2.append(c)
+                set_cells(r, c2)
+            new[rid] = r
+    recipes.clear(); recipes.update(new)
+    wn = {'dark_oak': 'Dark Oak'}
+    for r in new.values():
+        o = r['out']
+        if '@' in o and not o.endswith('@double'):
+            base, w = o.split('@', 1)
+            bn = (names.get(base) or base.split(':')[-1].replace('_', ' ').title()).replace('%s', '').strip()
+            names[o] = wn.get(w, w.title()) + ' ' + bn
+
+
 def main():
     jars = []
     for f in sorted(os.listdir(MODS)):
@@ -326,6 +380,7 @@ def main():
 
     for x in DOUBLES:
         names[x + '@double'] = 'Double ' + names.get(x, x.split(':')[-1].replace('_', ' ').title())
+    split_by_wood()
     json.dump({'recipes': list(recipes.values()), 'tags': tags, 'names': names,
                'mods': sorted(mods_loaded)}, open(OUT, 'w'))
     print('recipes', len(recipes), 'tags', len(tags), 'names', len(names), stats)
