@@ -11,10 +11,10 @@
 local CONF = {
   fuelChest = { x = -95, y = 253, z = -2245 },                        -- the chest blocks themselves;
   drops = { { x = -91, y = 253, z = -2247 }, { x = -91, y = 253, z = -2249 } },  -- turtles sit on top
-  quarry = { x = -80, z = -2240 },          -- north-west corner of the 2x2 chunks (chunks -5..-4, -140..-139)
+  quarry = { x = -96, z = -2240 },          -- north-west corner of the 2x2 chunks south of the base (chunks -6..-5, -140..-139)
   top = 128, bottom = 65,                   -- phase 1: the best ore band
   laneUp = 6,                               -- turtle n travels at (chest top + laneUp + n)
-  protect = { x1 = -107, x2 = -83, z1 = -2257, z2 = -2233, y1 = 240 },  -- the base: never break blocks here
+  protect = { x1 = -96, x2 = -81, z1 = -2256, z2 = -2241, y1 = 240 },   -- the base chunk: never break blocks here
   fuelTarget = 2000,                        -- fill up to this at the fuel chest
   junk = {
     "minecraft:stone", "minecraft:cobblestone", "minecraft:deepslate", "minecraft:cobbled_deepslate",

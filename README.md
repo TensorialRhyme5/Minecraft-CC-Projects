@@ -111,7 +111,7 @@ until the droppers are empty. Droppers are never used as storage.
 
 ## Mining turtles (mining dimension)
 
-Four Mining Ender Turtles quarry a 2x2-chunk area (chunks x -5..-4, z -140..-139, so x -80..-49 and z -2240..-2209),
+Four Mining Ender Turtles quarry the 2x2 chunks just south of the mine base (chunks x -6..-5, z -140..-139, so x -96..-65 and z -2240..-2209),
 y 128 down to 65. One chunk per turtle. Every turtle flies at its own height so they don't collide, and they
 take turns at the chests (the mine computer gives out the turns).
 
@@ -126,5 +126,5 @@ take turns at the chests (the mine computer gives out the turns).
 - Coal: every coal goes into the fuel chest, the turtle fills itself to 2,000 fuel, and half of what it brought
   goes to storage on its next trip (all of it stays in the fuel chest while that chest has under 64).
 - Blocks a diamond pickaxe can't break (Allthemodium ore) are skipped and listed in `mine_ores.txt`.
-- Never breaks anything near the base (x -107..-83, z -2257..-2233, y 240+). The space above the drop-off and
+- Never breaks anything in the base chunk (x -96..-81, z -2256..-2241, y 240+). The space above the drop-off and
   fuel chests must be open to the sky.
