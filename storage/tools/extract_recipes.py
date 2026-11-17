@@ -213,6 +213,10 @@ def parse_recipe(rid, j):
                 grid[y * 3 + x] = ing
         if double:   # Sophisticated "double" chests share the single chest's item id: give them their own entry
             DOUBLES.add(out); out = out + '@double'
+            # these recipes upgrade a chest that is ALREADY a double, so the chest in the middle is a double too
+            for gi, cell in enumerate(grid):
+                if cell and len(cell) == 1 and re.match(r'^sophisticatedstorage:([a-z_]*_)?chest$', cell[0]):
+                    DOUBLES.add(cell[0]); grid[gi] = [cell[0] + '@double']
         return {'id': rid, 'k': 's', 'out': out, 'n': n, 'g': grid}
     if 'ingredients' in j:
         ings = []

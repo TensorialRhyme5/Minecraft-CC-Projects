@@ -519,6 +519,22 @@ do
   SM.nameOf = nameOf
   -- "double" versions (id@double) are the same item id with a hidden marker: the turtle crafts the real id
   function SM.realId(id) return (id or ""):gsub("@double$", "") end
+  -- detail-page button: tell the storage this Sophisticated chest is a double (CC can't see the marker itself)
+  function SM.doubleButton(key, x1, y, x2)
+    local real = key:match("^(sophisticatedstorage:[%w_]*chest)#.+$")
+    if not real then return end
+    local marked = data.dbl[key] ~= nil
+    button("mkdbl", x1, y, x2, y, marked and "IT'S A DOUBLE  (tap to undo)" or "MARK AS DOUBLE CHEST", BLACK, marked and ORANGE or CYAN, function()
+      if marked then data.dbl[key] = nil; data.names[key] = nil
+      else
+        local pi = R.byId[real .. "@double"]
+        data.dbl[key] = real .. "@double"
+        data.names[key] = (pi and R.name[pi]) or ("Double " .. ((R.byId[real] and R.name[R.byId[real]]) or prettyId(real)))
+      end
+      dirty = true
+      if SM.rescan then SM.rescan() end
+    end)
+  end
   -- after crafting a double, remember its marker so the storage files it as the double from now on
   function SM.learnDouble(pseudo, pk)
     if not (pseudo and pseudo:find("@double$") and pk) then return end
@@ -1909,6 +1925,7 @@ local function drawDetail()
     text(RX2 - #n, 11 + i, n, CYAN, PANEL)
   end
   if #invs > 5 then text(RX1 + 1, 17, "+" .. (#invs - 5) .. " more", GRAY, PANEL) end
+  SM.doubleButton(id, RX1, 18, RX2)
   -- retrieve
   local _, kind = currentPickup()
   local who = owners()
@@ -2454,7 +2471,7 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end, SM = SM, queue = queue, byName = function() return byName end, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
+    busy = function() return busy end, SM = SM, queue = queue, byName = function() return byName end, groupItems = groupItems, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
 math.randomseed(os.epoch("utc") + os.getComputerID() * 7919)
