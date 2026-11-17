@@ -374,6 +374,14 @@ local function loadRecipes()
   local outs = {}
   for o in pairs(byOut) do outs[#outs + 1] = o end
   table.sort(outs, function(a, b) return name[a] < name[b] end)
+  -- recipes the game turned down before (a modpack can remove or change them) are left out for good
+  if data.badRc then
+    for o, l in pairs(byOut) do
+      for j = #l, 1, -1 do
+        if data.badRc[id[o] .. "|" .. l[j].k .. "|" .. tostring(l[j].g)] then table.remove(l, j) end
+      end
+    end
+  end
   R.id, R.name, R.byId, R.tagName, R.tagRaw, R.grpRaw, R.byOut, R.outs = id, name, byId, tagName, tagRaw, grpRaw, byOut, outs
   R.cook, R.cookSig = cook, os.epoch("utc")
   R.tagMem, R.grpMem = {}, {}
@@ -1889,6 +1897,21 @@ local function slotCraftable(g, short, out)
   return slotCache[key]
 end
 
+-- the game said "no" to this recipe: never use it again, and work out the craft another way
+function R.dropRecipe(out, rc)
+  if not rc or rc.smelt then return end
+  data.badRc = data.badRc or {}
+  data.badRc[R.id[out] .. "|" .. rc.k .. "|" .. tostring(rc.g)] = true
+  save()
+  rc.bad = true
+  local l = R.byOut[out] or {}
+  for j = #l, 1, -1 do if l[j] == rc then table.remove(l, j) end end
+  R.ready = {}
+  for k in pairs(shortMemo) do shortMemo[k] = nil end
+  if UI.rsel == out then UI.rlist = rankRecipes(out); UI.rvar = 1 end
+  pcall(logResult, "  (the game doesn't accept that " .. itemName(out) .. " recipe here - won't use it again)")
+end
+
 -- crafted parts land in the pickup; put them back into storage so the next step can use them
 local function pickupToStorage(id)
   local pk = currentPickup()
@@ -1935,12 +1958,14 @@ local function chainCraft(t)
         step = "Step " .. i .. "/" .. total .. ": " })
     end
     pcall(logResult, "  step " .. i .. ": " .. name .. " - wanted " .. (st.crafts * (st.rc.n or 1)) .. ", turtle made " .. tostring(made) .. (err and (" - " .. err) or ""))
+    if err and err:find("rejected the recipe", 1, true) then R.dropRecipe(st.out, st.rc) end
     if err then pickupToStorage(SM.realId(R.id[st.out])); return 0, "while making " .. name .. ": " .. err end
     SM.learnDouble(R.id[st.out], currentPickup())
     pickupToStorage(SM.realId(R.id[st.out]))
   end
   t.step = "Step " .. total .. "/" .. total .. ": "
   local made, err = autoCraft(t)
+  if err and err:find("rejected the recipe", 1, true) then R.dropRecipe(t.out, t.rc) end
   return made, err, #steps
 end
 
@@ -3086,11 +3111,14 @@ local function worker()
         if not okc then made, err = 0, tostring(made) end
         busy = nil
         SM.learnDouble(R.id[t.out], currentPickup())
-        if err and not t.retried and (err:find("couldn't take enough", 1, true) or err:find("ran out of", 1, true)) and made < t.crafts then
+        local nextRc = t.rc.bad and R.byOut[t.out] and R.byOut[t.out][1] or (not t.rc.bad and t.rc)
+        local rejected = err and err:find("rejected the recipe", 1, true)
+        if err and (t.retried or 0) < (rejected and 3 or 1) and nextRc and made < t.crafts and (rejected or
+           err:find("couldn't take enough", 1, true) or err:find("ran out of", 1, true)) then
           -- a step came up short (its ingredients are back in storage): plan again from the real counts, once
           scan()
           setStatus("Came up short (" .. err .. ") - planning again and retrying " .. t.name .. "...", YELLOW)
-          queue({ kind = "autocraft", rc = t.rc, out = t.out, crafts = t.crafts - made, name = t.name, retried = true, before = made, wood = t.wood })
+          queue({ kind = "autocraft", rc = nextRc, out = t.out, crafts = t.crafts - made, name = t.name, retried = (t.retried or 0) + 1, before = (t.before or 0) + made, wood = t.wood })
         elseif err then
           made = made + (t.before or 0)
           setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err .. (t.retried and " (even after a retry)" or ""), made > 0 and YELLOW or RED)
