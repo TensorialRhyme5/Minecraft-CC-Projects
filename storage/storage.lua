@@ -693,9 +693,27 @@ do
     end
   end
   local function fits(f, j) return (f.blast and j.b) or ((not f.blast) and j.f) end
+  -- an idle furnace (nothing in it, nothing it could take) gives its coal/charcoal back to storage,
+  -- so busy furnaces can use it instead of running out
+  local function returnIdleFuel()
+    local gave = 0
+    for _, f in ipairs(SM.furnaces) do
+      local wanted = false
+      if not data.smeltStop then for _, j in ipairs(SM.jobs) do if j.left > 0 and fits(f, j) then wanted = true; break end end end
+      if not wanted then
+        local ok, l = pcall(peripheral.call, f.name, "list")
+        if ok and type(l) == "table" and not l[1] and l[2] and (l[2].name == "minecraft:coal" or l[2].name == "minecraft:charcoal") then
+          gave = gave + storeFrom(f.name, 2, l[2].name, l[2].count)
+        end
+      end
+    end
+    if gave > 0 and SM.rescan then SM.rescan() end      -- so the returned fuel can be handed out right away
+    return gave
+  end
   function SM.tick()
     if #SM.furnaces == 0 then return end
     SM.noFuel = false
+    returnIdleFuel()
     for _, f in ipairs(SM.furnaces) do
       local ok, l = pcall(peripheral.call, f.name, "list")
       if ok and type(l) == "table" then
