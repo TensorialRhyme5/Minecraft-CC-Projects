@@ -2690,7 +2690,7 @@ local function draw()
 end
 
 -- ---------------------------------------------------------- pocket remote server
-local NET_PROTO = "storagenet"
+local NET_PROTO = CFG.title == "MINE" and "minestore" or "storagenet"   -- the mine has its own channel
 local function searchFor(q, offset, limit)
   q = (q or ""):lower()
   local out = {}
@@ -2744,7 +2744,6 @@ local function verify(msg)
 end
 local function netServer()
   openNet()
-  if CFG.title == "MINE" and not CFG.pockets then while true do sleep(3600) end end   -- pockets talk to home only
   pcall(rednet.host, NET_PROTO, "storage_" .. os.getComputerID())
   while true do
     local from, msg = rednet.receive(NET_PROTO)
@@ -2784,6 +2783,10 @@ local function netServer()
           setStatus("Pocket: emptying " .. (r.player or "your") .. " inventory into storage...", CYAN)
           rednet.send(from, netInfo(r.player), NET_PROTO)
         elseif msg.type == "info" then
+          rednet.send(from, netInfo(r.player), NET_PROTO)
+        elseif msg.type == "tcmd" and CFG.title == "MINE" and (msg.q == "recall" or msg.q == "go" or msg.q == "reboot") then
+          pcall(rednet.broadcast, { t = "cmd", cmd = msg.q }, "minenet")     -- pocket: recall / go / update the turtles
+          setStatus("Pocket: turtles " .. (msg.q == "reboot" and "updating" or msg.q == "go" and "back to work" or "recalled"), CYAN)
           rednet.send(from, netInfo(r.player), NET_PROTO)
         end
       end

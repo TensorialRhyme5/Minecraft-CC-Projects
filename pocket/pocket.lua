@@ -664,6 +664,211 @@ local function drawControl()
   end
 end
 
+
+-- ---------------------------------------------------------- MINE tab: the mine storage + the mining turtles
+-- Turtles broadcast their status over ender modems, so we just listen. Searching the mine storage and
+-- recalling / sending / updating the turtles is signed with a separate pairing (made on the MINE screen).
+local MINE
+do
+  local PROTO, FILE = "minestore", "mine_pairing.txt"
+  MINE = { id = nil, key = nil, lookAt = -100, page = "turtles", q = "", qpage = 1, results = {}, found = 0,
+    info = nil, sel = nil, tsel = nil, t = {}, code = "", pairing = nil, msg = nil, searchAt = 0 }
+  if fs.exists(FILE) then
+    local f = fs.open(FILE, "r"); local ok, d = pcall(textutils.unserialize, f.readAll()); f.close()
+    if ok and type(d) == "table" and type(d.key) == "string" then MINE.key, MINE.sid = d.key, d.sid end
+  end
+  local MROWS = H - 7
+  local function send(msg)
+    if not MINE.id or not MINE.key then return end
+    msg.dev = os.getComputerID(); msg.ctr = nextCtr()
+    msg.mac = sha256(MINE.key .. "|" .. msg.ctr .. "|" .. canon(msg))
+    rednet.send(MINE.id, msg, PROTO)
+  end
+  local function search() MINE.searchAt = 0; send({ type = "search", q = MINE.q, off = (MINE.qpage - 1) * MROWS, lim = MROWS }) end
+  local function pair()
+    if #MINE.code ~= 8 then MINE.msg = "The code has 8 letters/numbers"; return end
+    local dev, nonce = os.getComputerID(), tostring(math.random(1, 2 ^ 30)) .. tostring(os.epoch("utc"))
+    MINE.pairing, MINE.pairAt, MINE.msg = MINE.code, now(), "Pairing..."
+    rednet.broadcast({ type = "pair", dev = dev, nonce = nonce, proof = sha256(MINE.code .. "|pair|" .. dev .. "|" .. nonce) }, PROTO)
+  end
+  local function pretty(id)
+    local n = (tostring(id):match(":(.+)$") or tostring(id)):gsub("_", " ")
+    return (n:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
+  end
+
+  local function drawPair()
+    center(3, "PAIR WITH THE MINE", C.accent)
+    text(2, 5, "On the MINE screen:", C.dim)
+    text(2, 6, "REMOTES > tap a name", C.text)
+    text(2, 8, "then type the code here:", C.dim)
+    fill(4, 10, W - 3, 12, C.panel)
+    local shown = MINE.code:upper()
+    shown = (shown:sub(1, 4) .. (#shown > 4 and ("-" .. shown:sub(5)) or "")) .. (#shown < 8 and "_" or "")
+    center(11, shown, C.accent, C.panel)
+    button("mpairgo", 4, 14, W - 3, 15, "PAIR", C.bg, #MINE.code == 8 and C.good or C.panel, pair)
+    if MINE.msg then center(17, fit(MINE.msg, W), MINE.msg:find("ail") and C.bad or C.dim) end
+    if not MINE.id then center(H - 1, "(looking for the mine...)", C.panel) end
+  end
+
+  local function drawTurtles()
+    local y = 2
+    if MINE.tsel then                                           -- one turtle's items
+      local t = MINE.t[MINE.tsel]
+      text(1, y, "TURTLE " .. MINE.tsel, C.accent)
+      if t then text(W - #tostring(t.free or "?") - 5, y, (t.free or "?") .. " free", C.dim) end
+      y = y + 1
+      if not t then text(1, y + 1, "not heard from yet", C.dim)
+      elseif type(t.inv) ~= "table" then
+        text(1, y + 1, "older turtle code - restart", C.dim); text(1, y + 2, "it once (or tap UPDATE)", C.dim)
+      elseif #t.inv == 0 then text(1, y + 1, "carrying nothing", C.dim)
+      else
+        table.sort(t.inv, function(a, b) return a.c > b.c end)
+        for i, it in ipairs(t.inv) do
+          if y + i > H - 3 then break end
+          local n = short(it.c)
+          text(1, y + i, fit(pretty(it.id), W - #n - 2), C.text, (i % 2 == 0) and C.bg or C.blue)
+          fill(#fit(pretty(it.id), W - #n - 2) + 1, y + i, W, y + i, (i % 2 == 0) and C.bg or C.blue)
+          text(W - #n + 1, y + i, n, C.cyan, (i % 2 == 0) and C.bg or C.blue)
+        end
+      end
+      button("mtback", 1, H - 2, W, H - 2, "\17 BACK", C.bg, C.accent, function() MINE.tsel = nil end)
+      return
+    end
+    for n = 1, 4 do
+      local t = MINE.t[n]
+      local yy = y + (n - 1) * 3
+      local age = t and now() - t.at or 999
+      local col = not t and C.dim or (age > 60 and C.bad or C.good)
+      text(1, yy, tostring(n), C.accent)
+      text(3, yy, fit(t and t.state or "not heard from yet", W - 3), col)
+      if t then
+        text(3, yy + 1, fit("y" .. tostring(t.y) .. " fuel " .. tostring(t.fuel) .. " free " .. tostring(t.free) ..
+          (age > 60 and (" (" .. math.floor(age) .. "s)") or ""), W - 3), C.dim)
+      end
+      hit("mt" .. n, 1, yy, W, yy + 1, function() MINE.tsel = n end)
+    end
+    y = y + 12
+    if MINE.key then
+      local bw = math.floor((W - 2) / 3)
+      button("mrecall", 1, y, bw, y + 1, "RECALL", C.bg, C.accent, function() send({ type = "tcmd", q = "recall" }); MINE.note = "Recalling..." end)
+      button("mgo", bw + 2, y, 2 * bw + 1, y + 1, "GO", C.bg, C.good, function() send({ type = "tcmd", q = "go" }); MINE.note = "Back to work" end)
+      button("mupd", 2 * bw + 3, y, W, y + 1, "UPDATE", C.bg, C.cyan, function() send({ type = "tcmd", q = "reboot" }); MINE.note = "Updating turtles..." end)
+      if MINE.note then text(1, y + 2, fit(MINE.note, W), C.dim) end
+    else
+      text(1, y, "Pair on the ITEMS page", C.dim); text(1, y + 1, "to recall / update them", C.dim)
+    end
+  end
+
+  local function drawItems()
+    if not MINE.key then drawPair(); return end
+    fill(1, 2, W, 2, C.panel)
+    if MINE.q == "" then text(2, 2, "search the mine...", C.dim, C.panel) else text(2, 2, fit(MINE.q, W - 3) .. "_", C.text, C.panel) end
+    if not MINE.id then center(6, "Looking for the mine...", C.dim); center(8, "It needs an ender modem", C.dim); return end
+    if MINE.sel then
+      local it = MINE.sel
+      text(2, 4, fit(it.name, W - 2), C.accent)
+      text(2, 6, "In the mine: ", C.dim); text(15, 6, commas(it.count), C.cyan)
+      text(2, 8, "Send to the MINE barrel:", C.dim)
+      local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
+      for i, a in ipairs(amounts) do
+        local x = 2 + (i - 1) * 6
+        button("mn" .. a[1], x, 10, x + 4, 12, a[1], C.bg, C.good, function()
+          send({ type = "send", id = it.id, n = a[2], to = "pickup" }); MINE.note = "Sending " .. a[1] .. " " .. it.name
+        end)
+      end
+      button("miback", 2, H - 3, W - 1, H - 3, "\17 BACK", C.bg, C.accent, function() MINE.sel = nil end)
+    else
+      local pages = math.max(1, math.ceil(MINE.found / MROWS))
+      if #MINE.results == 0 then center(6, MINE.got and "Nothing found" or "Searching...", C.dim) end
+      for r = 1, MROWS do
+        local it = MINE.results[r]
+        if not it then break end
+        local y = 2 + r
+        local bg = (r % 2 == 0) and C.bg or C.blue
+        fill(1, y, W, y, bg)
+        local n = short(it.count)
+        text(1, y, fit(it.name, W - #n - 2), C.text, bg); text(W - #n + 1, y, n, C.cyan, bg)
+        hit("mi" .. r, 1, y, W, y, function() MINE.sel = it end)
+      end
+      local y = H - 3
+      center(y, MINE.qpage .. "/" .. pages .. "  (" .. MINE.found .. ")", C.dim)
+      if MINE.qpage > 1 then button("mprev", 1, y, 4, y, "\17", C.accent, C.panel, function() MINE.qpage = MINE.qpage - 1; search() end) end
+      if MINE.qpage < pages then button("mnext", W - 3, y, W, y, "\16", C.accent, C.panel, function() MINE.qpage = MINE.qpage + 1; search() end) end
+    end
+    local st = MINE.info and (MINE.info.busy or MINE.info.status) or MINE.note or ""
+    text(1, H - 2, fit(st, W), C.dim)
+  end
+
+  function MINE.draw()
+    local function pg(id, x1, x2, label, name)
+      local on = MINE.page == name
+      button(id, x1, H, x2, H, label, on and C.bg or C.dim, on and C.cyan or C.panel, function() MINE.page = name; if name == "items" then search() end end)
+    end
+    pg("mpT", 1, 13, "TURTLES", "turtles")
+    pg("mpI", 14, W, "ITEMS", "items")
+    if MINE.page == "items" then drawItems() else drawTurtles() end
+  end
+  function MINE.tick(t)
+    if MINE.pairing and t - MINE.pairAt > 4 then MINE.pairing = nil; MINE.msg = "Failed: " .. (MINE.why or "no reply - ender modem on the mine?"); MINE.why = nil end
+    if not MINE.id and t - MINE.lookAt > 5 then
+      MINE.lookAt = t
+      local ids = { rednet.lookup(PROTO) }
+      local id = ids[1]
+      for _, x in ipairs(ids) do if MINE.sid == x then id = x end end
+      MINE.id = id
+      if id and MINE.page == "items" then search() end
+    end
+    if MINE.searchAt > 0 and t >= MINE.searchAt then search() end
+    if MINE.page == "items" and MINE.id and MINE.key and t - (MINE.infoAt or 0) > 5 then
+      MINE.infoAt = t
+      if MINE.sel then send({ type = "info" }) else search() end
+    end
+  end
+  function MINE.char(a)
+    if MINE.page ~= "items" then return end
+    if not MINE.key then
+      if a:match("[%w]") and #MINE.code < 8 then MINE.code = MINE.code .. a:upper() end
+    else MINE.q = MINE.q .. a; MINE.qpage = 1; MINE.sel = nil; MINE.searchAt = now() + 0.35 end
+  end
+  function MINE.key_(a)
+    if MINE.page ~= "items" then return end
+    if not MINE.key then
+      if a == keys.backspace then MINE.code = MINE.code:sub(1, -2) elseif a == keys.enter then pair() end
+    elseif a == keys.backspace then MINE.q = MINE.q:sub(1, -2); MINE.qpage = 1; MINE.sel = nil; MINE.searchAt = now() + 0.35
+    elseif a == keys.enter then search() end
+  end
+  function MINE.scroll(a) if MINE.page == "items" and not MINE.sel then MINE.qpage = math.max(1, MINE.qpage + a); search() end end
+  -- returns true when the message was for us
+  function MINE.net(from, msg, proto, t)
+    if type(msg) ~= "table" then return false end
+    if proto == "minenet" then
+      if msg.t == "status" and tonumber(msg.n) then msg.at = t; MINE.t[tonumber(msg.n)] = msg end
+      return true
+    end
+    if proto ~= PROTO then return false end
+    if msg.dev ~= nil and tonumber(msg.dev) ~= os.getComputerID() then return true end
+    if msg.type == "paired" then
+      if msg.ok and MINE.pairing then
+        MINE.key = sha256(MINE.pairing .. "|key|" .. os.getComputerID()); MINE.sid, MINE.id = from, from
+        local f = fs.open(FILE, "w"); f.write(textutils.serialize({ key = MINE.key, sid = from })); f.close()
+        MINE.code, MINE.pairing, MINE.msg = "", nil, nil
+        search()
+      elseif MINE.pairing then MINE.why = tostring(msg.why or "?") end
+    elseif msg.type == "denied" then
+      if msg.why == "not paired" and (not MINE.sid or MINE.sid == from) then
+        MINE.key = nil; if fs.exists(FILE) then fs.delete(FILE) end; MINE.msg = "Removed from the mine - pair again"
+      end
+    else
+      MINE.id = from
+      if msg.type == "results" and msg.q == MINE.q and (msg.off or 0) == (MINE.qpage - 1) * MROWS then
+        MINE.results, MINE.found, MINE.got = msg.items or {}, msg.found or 0, true
+      end
+      if msg.type == "results" or msg.type == "info" then MINE.info = msg end
+    end
+    return true
+  end
+end
+
 local function draw(t)
   clear(); hits = {}
   local tab = UI.tab
@@ -671,10 +876,11 @@ local function draw(t)
     local on = tab == name
     button(id, x1, 1, x2, 1, label, on and C.bg or C.text, on and C.accent or C.panel, fn)
   end
-  tabBtn("tabI", 1, 8, "ITEMS", "items", function() UI.tab = "items"; search() end)
-  tabBtn("tabM", 9, 17, "MUSIC", "music", function() UI.tab = "music" end)
-  tabBtn("tabC", 18, W, "CONTROL", "control", function() UI.tab = "control" end)
-  if tab == "items" then drawItems() elseif tab == "music" then drawMusic(t) else drawControl() end
+  tabBtn("tabI", 1, 6, "ITEMS", "items", function() UI.tab = "items"; search() end)
+  tabBtn("tabM", 7, 12, "MUSIC", "music", function() UI.tab = "music" end)
+  tabBtn("tabC", 13, 20, "CONTROL", "control", function() UI.tab = "control" end)
+  tabBtn("tabX", 21, W, "MINE", "mine", function() UI.tab = "mine" end)
+  if tab == "items" then drawItems() elseif tab == "music" then drawMusic(t) elseif tab == "mine" then MINE.draw() else drawControl() end
   ALERT.draw(t or now())
   present()
 end
@@ -715,6 +921,7 @@ local function main()
         if UI.sel then storageSend({ type = "info" }) else search() end
       end
       if UI.tab == "music" and not musicOnline() and t - (M.helloAt or 0) > 3 then M.helloAt = t; musicSend({ cmd = "hello" }) end
+      if UI.tab == "mine" then MINE.tick(t) end
       draw(t)
       timer = os.startTimer(0.2)
     elseif ev == "mouse_click" then
@@ -723,6 +930,9 @@ local function main()
         if b >= h.x1 and b <= h.x2 and c >= h.y1 and c <= h.y2 then flash[h.id] = t; h.fn(b, c); break end
       end
       draw(t)
+    elseif ev == "char" and UI.tab == "mine" then MINE.char(a); draw(t)
+    elseif ev == "key" and UI.tab == "mine" then MINE.key_(a); draw(t)
+    elseif ev == "mouse_scroll" and UI.tab == "mine" then MINE.scroll(a); draw(t)
     elseif ev == "char" and UI.tab == "music" and not MSEC.key then MSEC.typeChar(a); draw(t)
     elseif ev == "key" and UI.tab == "music" and not MSEC.key then
       if a == keys.backspace then MSEC.code = MSEC.code:sub(1, -2)
@@ -749,6 +959,8 @@ local function main()
     elseif ev == "key" and UI.tab == "items" then
       if a == keys.backspace then UI.q = UI.q:sub(1, -2); UI.page = 1; UI.sel = nil; UI.searchAt = t + 0.35; draw(t)
       elseif a == keys.enter then search() end
+    elseif ev == "rednet_message" and MINE.net(a, b, c, t) then
+      if UI.tab == "mine" then draw(t) end
     elseif ev == "rednet_message" then
       local msg = b
       if c == STORE_PROTO and type(msg) == "table" and msg.dev ~= nil and tonumber(msg.dev) ~= os.getComputerID() then
