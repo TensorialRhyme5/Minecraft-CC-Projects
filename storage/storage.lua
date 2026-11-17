@@ -108,6 +108,15 @@ if fs.exists(SAVE) then
     data.smeltHeld = type(d.smeltHeld) == "table" and d.smeltHeld or {}
   end
 end
+-- long names slide sideways like the jukebox's song titles (short ones are left alone)
+local function slide(s, width)
+  s = tostring(s or "")
+  if width < 1 then return "" end
+  if #s <= width then return s end
+  local loop = s .. "   " .. string.char(7) .. "   "
+  local off = math.floor(math.max(0, now() - 2) * 5) % #loop
+  return (loop .. loop):sub(off + 1, off + width)
+end
 local dirty = false
 local function save()
   local f = fs.open(SAVE, "w"); f.write(textutils.serialize(data)); f.close()
@@ -1973,7 +1982,7 @@ local function drawList()
       fill(x, y, x + colW - 1, y, bg)
       local nr = #R.byOut[o]
       local tag = ready and "READY" or (nr > 1 and (nr .. " ways") or "")
-      text(x + 1, y, fit(it.name, colW - #tag - 4), sel and YELLOW or (ready and WHITE or LGRAY), bg)
+      text(x + 1, y, slide(it.name, colW - #tag - 4), sel and YELLOW or (ready and WHITE or LGRAY), bg)
       text(x + colW - #tag - 1, y, tag, ready and LIME or GRAY, bg)
       hit("rec:" .. o, x, y, x + colW - 1, y, function()
         if UI.rsel == o then UI.rsel = nil else openRecipe(o, false) end
@@ -1988,7 +1997,7 @@ local function drawList()
       local bg = sel and HILITE or ((i % 2 == 0) and BLACK or PANEL)
       fill(x, y, x + colW - 1, y, bg)
       local cnt = commas(it.count)
-      text(x + 1, y, fit(it.name, colW - #cnt - 4), sel and YELLOW or WHITE, bg)
+      text(x + 1, y, slide(it.name, colW - #cnt - 4), sel and YELLOW or WHITE, bg)
       text(x + colW - #cnt - 1, y, cnt, low and RED or CYAN, bg)
       if low then text(x + colW - #cnt - 3, y, "!", RED, bg) end
       local id = it.id
@@ -2058,7 +2067,7 @@ local function drawDetail()
   local e = index[id]
   local name = data.names[id] or prettyId(id)
   fill(RX1 - 1, 5, RX2, H, PANEL)
-  text(RX1, 6, fit(name, 38), YELLOW, PANEL)
+  text(RX1, 6, slide(name, 38), YELLOW, PANEL)
   text(RX1, 7, fit(e and e.name or id, 38), GRAY, PANEL)
   if e and e.name ~= id and e.locs[1] then        -- list the enchantments under the name
     UI.enchCache = UI.enchCache or {}
