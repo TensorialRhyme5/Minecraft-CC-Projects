@@ -555,6 +555,21 @@ local RX1, RX2 = 83, 121             -- right panel
 local SM
 do
   SM = { furnaces = {}, jobs = {}, asks = {}, once = {}, built = nil, noFuel = false, tried = {}, dups = {} }
+  -- one pushItems moves at most 64 at a time, but a chest with a stack upgrade holds far more in one slot:
+  -- keep going until we've moved what we wanted (or nothing more will go)
+  function SM.moveAll(from, to, slot, limit, toSlot)
+    local total = 0
+    limit = limit or math.huge
+    for _ = 1, 200 do
+      if total >= limit then break end
+      local want = limit - total
+      local ok, n = pcall(peripheral.call, from, "pushItems", to, slot, want ~= math.huge and want or nil, toSlot)
+      if not ok then return total, n end
+      if type(n) ~= "number" or n <= 0 then break end
+      total = total + n
+    end
+    return total
+  end
   local FUELS = { "minecraft:charcoal", "minecraft:coal" }        -- the only fuels the smelter will use
   -- ticks per item (a vanilla furnace is 200 = 10 s). Iron Furnaces tiers use the mod's default speeds.
   local TICKS = { iron = 160, gold = 120, diamond = 80, emerald = 40, obsidian = 20, crystal = 40, netherite = 5,
@@ -1579,10 +1594,11 @@ local function retrieve(id, want)
   local moved = 0
   for _, l in ipairs(e.locs) do
     if moved >= want then break end
-    local ok, n = pcall(peripheral.call, l.inv, "pushItems", target, l.slot, math.min(want - moved, l.count))
-    if ok and type(n) == "number" then moved = moved + n end
-    if not ok or n ~= math.min(want - moved + (tonumber(n) or 0), l.count) then
-      SM.tried[#SM.tried + 1] = l.inv .. " slot " .. l.slot .. " gave " .. tostring(ok and n or "error") .. " of " .. l.count
+    local asked = math.min(want - moved, l.count)
+    local n, err = SM.moveAll(l.inv, target, l.slot, asked)
+    moved = moved + n
+    if n ~= asked then
+      SM.tried[#SM.tried + 1] = l.inv .. " slot " .. l.slot .. " gave " .. (err and "error" or tostring(n)) .. " of " .. l.count
     end    -- (0 can just mean this spot is out of date: keep going)
   end
   return moved
@@ -2082,8 +2098,7 @@ local function organize()
       -- 1) pull stacks from other chests into the home chest
       for _, l in ipairs(e.locs) do
         if l.inv ~= home then
-          local ok, m = pcall(peripheral.call, l.inv, "pushItems", home, l.slot)
-          if ok and type(m) == "number" and m > 0 then moves = moves + 1 end
+          if SM.moveAll(l.inv, home, l.slot, l.count) > 0 then moves = moves + 1 end
         end
       end
       -- 2) merge partial stacks inside the home chest
@@ -2094,8 +2109,7 @@ local function organize()
         table.sort(slots)
         local first, last = 1, #slots
         while first < last do
-          local ok2, m = pcall(peripheral.call, home, "pushItems", home, slots[last], nil, slots[first])
-          if ok2 and type(m) == "number" and m > 0 then moves = moves + 1 end
+          if SM.moveAll(home, home, slots[last], nil, slots[first]) > 0 then moves = moves + 1 end
           local ok3, d = pcall(peripheral.call, home, "getItemDetail", slots[last])
           if not (ok3 and d) then last = last - 1          -- emptied that stack
           else first = first + 1 end                       -- target stack is full, move to the next
