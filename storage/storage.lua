@@ -89,7 +89,8 @@ local function fit(s, w) if #s > w then return s:sub(1, math.max(1, w - 1)) .. "
 
 -- ---------------------------------------------------------- saved settings (alerts + item names)
 local SAVE = "storage_data.txt"
-local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {}, dbl = {}, woodOf = {} }
+local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {}, dbl = {}, woodOf = {},
+  smeltStop = false, smeltHeld = {} }
 if fs.exists(SAVE) then
   local f = fs.open(SAVE, "r")
   local ok, d = pcall(textutils.unserialize, f.readAll())
@@ -103,6 +104,8 @@ if fs.exists(SAVE) then
     data.dbl = type(d.dbl) == "table" and d.dbl or {}
     data.woodOf = type(d.woodOf) == "table" and d.woodOf or {}
     for k, v in pairs(data.woodOf) do if v == false then data.woodOf[k] = nil end end   -- unfinished lookups: try again
+    data.smeltStop = d.smeltStop == true
+    data.smeltHeld = type(d.smeltHeld) == "table" and d.smeltHeld or {}
   end
 end
 local dirty = false
@@ -611,9 +614,17 @@ do
     SM.asks[id] = (SM.asks[id] or 0) + count
     return "ask"
   end
+  local function hold(id, n)
+    if n <= 0 then return end
+    for _, h in ipairs(data.smeltHeld) do if h.id == id then h.n = h.n + n; dirty = true; return end end
+    data.smeltHeld[#data.smeltHeld + 1] = { id = id, n = n }
+    dirty = true
+  end
+  function SM.heldCount() local n = 0; for _, h in ipairs(data.smeltHeld) do n = n + h.n end return n end
   function SM.add(id, n, rc)
     rc = rc or SM.info(id)
     if not rc or n <= 0 then return nil end
+    if data.smeltStop then hold(id, n); return nil end
     local j = { id = id, left = n, total = n, outId = R.id[rc.out], b = rc.b, f = rc.f }
     setStatus("Smelting " .. commas(n) .. " " .. nameOf(id) .. "...", ORANGE)
     SM.jobs[#SM.jobs + 1] = j
@@ -663,6 +674,19 @@ do
       local ok, l = pcall(peripheral.call, f.name, "list")
       if ok and type(l) == "table" then
         if l[3] and storeFrom(f.name, 3, l[3].name, l[3].count) > 0 then SM.progressAt = now() end   -- finished items back to storage
+        if data.smeltStop then
+          -- stopped: anything still sitting in an input slot goes back to storage and is held
+          if l[1] then hold(l[1].name, storeFrom(f.name, 1, l[1].name, l[1].count)) end
+          f.cur, f.n = nil, 0
+        else
+          SM.fill(f, l)
+        end
+      end
+    end
+    SM.finish()
+  end
+  -- normal running: top up one furnace's input and fuel
+  function SM.fill(f, l)
         local inp = l[1]
         f.cur, f.n = inp and inp.name or nil, inp and inp.count or 0
         local job
@@ -693,8 +717,31 @@ do
             if fid then pullInto(f.name, 2, fid, 16 - (fu and fu.count or 0)) elseif not fu then SM.noFuel = true end
           end
         end
-      end
+  end
+  -- EMERGENCY STOP / RESTORE (done by the smelter loop so it never clashes with a tick)
+  function SM.request(what) SM.req = what; os.queueEvent("smelt_tick") end
+  function SM.doRequest()
+    local what = SM.req
+    SM.req = nil
+    if what == "stop" and not data.smeltStop then
+      data.smeltStop = true
+      for _, j in ipairs(SM.jobs) do hold(j.id, math.max(0, j.left)) end
+      SM.jobs = {}
+      SM.tick()                                            -- empties every furnace into storage
+      dirty = true
+      setStatus("Smelter STOPPED - " .. commas(SM.heldCount()) .. " items held. Tap RESTORE to carry on.", RED)
+    elseif what == "resume" and data.smeltStop then
+      data.smeltStop = false
+      if SM.rescan then SM.rescan() end                    -- the held items are back in storage now
+      local held = data.smeltHeld
+      data.smeltHeld = {}
+      for _, h in ipairs(held) do SM.add(h.id, h.n) end
+      dirty = true
+      setStatus("Smelter restored - " .. #held .. " item type" .. (#held == 1 and "" or "s") .. " back in the furnaces", LIME)
     end
+  end
+  -- jobs with nothing left to put in and nothing still cooking are done
+  function SM.finish()
     for i = #SM.jobs, 1, -1 do
       local j = SM.jobs[i]
       if j.left <= 0 then
@@ -745,6 +792,7 @@ do
   end
   function SM.status()
     if #SM.furnaces == 0 then return nil end
+    if data.smeltStop then return "Smelter STOPPED - " .. commas(SM.heldCount()) .. " items held" end
     local busyN, left = 0, 0
     for _, f in ipairs(SM.furnaces) do if f.cur then busyN = busyN + 1 end end
     for _, j in ipairs(SM.jobs) do left = left + j.left end
@@ -757,6 +805,7 @@ do
   -- a crafting-chain step that needs smelting: send what the recipe needs, wait for it
   function SM.run(st, show)
     if #SM.furnaces == 0 then return 0, "no furnaces connected" end
+    if data.smeltStop then return 0, "the smelter is stopped (RESTORE it on the SMELTER panel)" end
     if SM.rescan then SM.rescan() end                     -- see what earlier steps just made
     local plan = craftPlan(st.rc, st.crafts)
     if plan.short > 0 then return 0, "not enough to smelt" end
@@ -774,6 +823,7 @@ do
       for _, j in ipairs(mine) do if not j.done then done = false end; left = left + math.max(0, j.left) end
       if done then break end
       if show then show("Smelting " .. commas(total) .. " for " .. nameOf(R.id[st.rc.out]) .. "  ~" .. fmtTime(SM.etaLeft()) .. " left") end
+      if data.smeltStop then return 0, "the smelter was stopped" end
       if now() - (SM.progressAt or now()) > 90 then                          -- nothing came out for 90 s
         return 0, SM.noFuel and "furnaces ran out of fuel (put coal or charcoal in storage)" or "furnaces stopped working (full output? no fuel?)"
       end
@@ -824,7 +874,13 @@ do
   -- the question on the storage screen
   function SM.drawPanel()
     text(RX1, 6, "SMELT THESE?", YELLOW)
-    text(RX1, 7, fit(#SM.furnaces .. " furnaces (" .. (SM.nBlast or 0) .. " blast)", RX2 - RX1 + 1), GRAY)
+    text(RX1, 7, fit(#SM.furnaces .. " furnaces (" .. (SM.nBlast or 0) .. " blast)", RX2 - RX1 - 17), GRAY)
+    if data.smeltStop then
+      button("smstop", RX2 - 15, 6, RX2, 7, "RESTORE", BLACK, LIME, function() SM.request("resume") end)
+      text(RX1, 8, fit("STOPPED - " .. commas(SM.heldCount()) .. " items held", RX2 - RX1 - 16), RED)
+    else
+      button("smstop", RX2 - 15, 6, RX2, 7, "EMERGENCY STOP", WHITE, RED, function() SM.request("stop") end)
+    end
     local ids = {}
     for id in pairs(SM.asks) do ids[#ids + 1] = id end
     table.sort(ids)
@@ -2257,7 +2313,8 @@ local function draw()
       if #SM.furnaces > 0 then
         local waiting = 0
         for _ in pairs(SM.asks) do waiting = waiting + 1 end
-        button("smelter", RX2 - 11, by - 2, RX2, by - 2, waiting > 0 and ("SMELT? " .. waiting) or "SMELTER", BLACK, waiting > 0 and YELLOW or ORANGE, function() UI.panel = "smelt" end)
+        button("smelter", RX2 - 11, by - 2, RX2, by - 2, data.smeltStop and "STOPPED" or (waiting > 0 and ("SMELT? " .. waiting) or "SMELTER"),
+          data.smeltStop and WHITE or BLACK, data.smeltStop and RED or (waiting > 0 and YELLOW or ORANGE), function() UI.panel = "smelt" end)
         local st = SM.status()
         if st then text(RX1, by - 2, fit(st, RX2 - RX1 - 12), ORANGE) end
       end
@@ -2550,6 +2607,7 @@ local function smeltLoop()
     local id = os.startTimer(2)
     repeat local ev, p = os.pullEvent() until (ev == "timer" and p == id) or ev == "smelt_tick"
     if now() - lastFind > 30 then lastFind = now(); SM.find() end
+    if SM.req then SM.doRequest() end
     SM.tick()
   end
 end
