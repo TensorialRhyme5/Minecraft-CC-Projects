@@ -764,7 +764,7 @@ do
         end
   end
   -- why an ingredient couldn't all go into the pickup: a really full barrel, or not enough in storage
-  function SM.whyShort(id, pk)
+  function SM.whyShort(id, pk, want, got)
     if pk then
       local ok, l = pcall(peripheral.call, pk, "list")
       local ok2, size = pcall(peripheral.call, pk, "size")
@@ -774,7 +774,11 @@ do
         if used >= size then return "the pickup is full - empty it and try again" end
       end
     end
-    return "couldn't take enough " .. nameOf(id) .. " out of storage"
+    local e = byName[id]
+    local where = {}
+    if e then for _, l in ipairs(e.locs) do where[#where + 1] = l.inv:gsub("^.*:", "") .. "#" .. l.slot .. "=" .. l.count; if #where >= 3 then break end end end
+    return "couldn't take enough " .. nameOf(id) .. " out of storage (needed " .. tostring(want) .. ", got " .. tostring(got) ..
+      ", storage thinks it has " .. (e and e.count or 0) .. (#where > 0 and (" in " .. table.concat(where, " ")) or "") .. ")"
   end
   -- ---------------------------------------------------------- TRASH: droppers over lava + a Redstone Relay
   -- The items go into the droppers (any number of them, facing down into lava) and the relay pulses
@@ -1562,7 +1566,7 @@ local function autoCraft(t)
       local got = retrieve(R.id[it], n)
       need[SM.realId(R.id[it])] = (need[SM.realId(R.id[it])] or 0) + n
       if got < n then sleep(0.1); scan(); got = got + retrieve(R.id[it], n - got) end   -- counts were out of date: once more
-      if got < n then return made, SM.whyShort(R.id[it], currentPickup()) end
+      if got < n then return made, SM.whyShort(R.id[it], currentPickup(), n, got) end
     end
     if not arrangePickup(pk, need) then return made, "pickup is too full to sort" end
     jobCounter = jobCounter + 1
