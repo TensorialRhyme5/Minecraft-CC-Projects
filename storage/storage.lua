@@ -2095,24 +2095,32 @@ local function organize()
       for _, l in ipairs(e.locs) do per[l.inv] = (per[l.inv] or 0) + l.count end
       local home, best = nil, -1
       for inv, c in pairs(per) do if c > best or (c == best and inv < home) then home, best = inv, c end end
-      -- 1) pull stacks from other chests into the home chest
+      -- 1) pull stacks from other chests into the home chest (many at once: each move takes a game tick)
+      local jobs = {}
       for _, l in ipairs(e.locs) do
         if l.inv ~= home then
-          if SM.moveAll(l.inv, home, l.slot, l.count) > 0 then moves = moves + 1 end
+          jobs[#jobs + 1] = function() if SM.moveAll(l.inv, home, l.slot, l.count) > 0 then moves = moves + 1 end end
         end
       end
-      -- 2) merge partial stacks inside the home chest
+      for k = 1, #jobs, 32 do
+        busy = "Organizing " .. n .. "/" .. #ids .. "  " .. (data.names[id] or prettyId(id)) ..
+          (#jobs > 32 and ("  (" .. math.min(#jobs, k + 31) .. "/" .. #jobs .. " stacks)") or "")
+        parallel.waitForAll(table.unpack(jobs, k, math.min(#jobs, k + 31)))
+      end
+      -- 2) merge partial stacks inside the home chest (big stacks with a stack upgrade)
       local ok, list = pcall(peripheral.call, home, "list")
       if ok and type(list) == "table" then
-        local slots = {}
-        for slot, it in pairs(list) do if it.name == id then slots[#slots + 1] = slot end end
+        local slots, cnt = {}, {}
+        for slot, it in pairs(list) do if it.name == id then slots[#slots + 1] = slot; cnt[slot] = it.count end end
         table.sort(slots)
         local first, last = 1, #slots
         while first < last do
-          if SM.moveAll(home, home, slots[last], nil, slots[first]) > 0 then moves = moves + 1 end
-          local ok3, d = pcall(peripheral.call, home, "getItemDetail", slots[last])
-          if not (ok3 and d) then last = last - 1          -- emptied that stack
-          else first = first + 1 end                       -- target stack is full, move to the next
+          local from, to = slots[last], slots[first]
+          local m = SM.moveAll(home, home, from, cnt[from], to)
+          if m > 0 then moves = moves + 1 end
+          cnt[from] = cnt[from] - m
+          if cnt[from] <= 0 then last = last - 1                -- emptied that stack
+          else first = first + 1 end                           -- the target stack is full, fill the next one
         end
       end
     end
