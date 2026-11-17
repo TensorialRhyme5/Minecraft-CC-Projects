@@ -45,6 +45,7 @@ if P and P.pend then                           -- the server stopped in the midd
 end
 local JOB = readT(JOBFILE)                     -- which turtle we are and how far along
 local CMD = nil                                -- "recall" from the mine computer
+local CH, HELPER = 1, false                    -- our chunk, and whether we're its helper
 local JUNK, ALLOW, FUEL_LOW = {}, {}, false
 for _, id in ipairs(CONF.junk) do JUNK[id] = true; ALLOW[id] = 1e9 end   -- (no junk cap: keep everything)
 local noted = {}
@@ -70,6 +71,7 @@ local function ping(state, force)
   end
   pcall(rednet.broadcast, { t = "status", n = info(), state = STATE, x = P and P.x, y = P and P.y, z = P and P.z,
     fuel = turtle.getFuelLevel(), slice = JOB and JOB.slice, cell = JOB and JOB.cell, free = free, inv = inv,
+    band = JOB and JOB.band, chunk = CH, helper = HELPER,
     label = os.getComputerLabel() }, PROTO)
 end
 local function ask(msg, timeout)
@@ -197,9 +199,17 @@ end
 -- ---------------------------------------------------------- where things are
 local DOCKY = CONF.fuelChest.y + 1
 local function lane() return DOCKY + CONF.laneUp + (JOB and JOB.n or 1) end
-local function corner(n)
-  return { x = CONF.quarry.x + ((n - 1) % 2) * 16, z = CONF.quarry.z + math.floor((n - 1) / 2) * 16 }
+-- turtle number -> chunk. 1-4: chunks 1-4 (the top), 5-8: helpers in chunks 1-4 (the bottom),
+-- 9-12: chunks 5-8 (the next 2x2 south), 13-16: helpers there, and so on
+local function chunkOf(n)
+  local g, r = math.floor((n - 1) / 8), (n - 1) % 8
+  return g * 4 + (r % 4) + 1, r >= 4
 end
+local function corner(c)                       -- chunks run 2 wide, going south
+  return { x = CONF.quarry.x + ((c - 1) % 2) * 16, z = CONF.quarry.z + math.floor((c - 1) / 2) * 16 }
+end
+local S                                        -- the column we go up and down in (helpers use the far corner)
+local HELP, BOTTOM = {}, {}                    -- from the mine computer: chunks with a helper / who's doing the bottom
 local function slicesOf(b)                     -- slice heights: each one clears y-1, y, y+1
   local list, y = {}, b.top - 1
   while y - 1 >= b.bottom do list[#list + 1] = y; y = y - 3 end
@@ -211,11 +221,13 @@ local SL = slicesOf(B)
 local ALLSL = 0
 for _, b in ipairs(CONF.bands) do ALLSL = ALLSL + #slicesOf(b) end
 local function cellXZ(k)                       -- back-and-forth rows over the chunk
+  if HELPER then k = 255 - k end               -- (helpers start at the far corner)
   local r, c = math.floor(k / 16), k % 16
   if r % 2 == 1 then c = 15 - c end
   return Q.x + c, Q.z + r
 end
-local function dropDock() return CONF.drops[(JOB.n <= 2) and 1 or 2] end
+local function dropNo() return ((chunkOf(JOB.n) - 1) % 4 < 2) and 1 or 2 end
+local function dropDock() return CONF.drops[dropNo()] end
 
 -- ---------------------------------------------------------- inventory + fuel
 local function freeSlots()
@@ -255,8 +267,8 @@ end
 local function costHome()                      -- fuel to get back to the chests from here, plus a margin
   local d = dropDock()
   local up = math.abs(lane() - P.y)
-  local across = inQ(P.x, P.z) and (math.abs(P.x - Q.x) + math.abs(P.z - Q.z)) or 0
-  return across + up + math.abs(Q.x - d.x) + math.abs(Q.z - d.z) + (lane() - DOCKY) + 150
+  local across = inQ(P.x, P.z) and (math.abs(P.x - S.x) + math.abs(P.z - S.z)) or 0
+  return across + up + math.abs(S.x - d.x) + math.abs(S.z - d.z) + (lane() - DOCKY) + 150
 end
 
 -- ---------------------------------------------------------- the chests (one turtle at a time)
@@ -291,6 +303,8 @@ local function updateNeeds()
     for id, need in pairs(r.needs) do ALLOW[id] = math.ceil(need / 4) end          -- split between 4 turtles
   end
   FUEL_LOW = r.fuelLow == true
+  if type(r.helpers) == "table" then HELP = r.helpers end
+  if type(r.bottom) == "table" then BOTTOM = r.bottom end
 end
 local function fuelStop()
   -- every coal goes into the fuel chest, then we take back what we burn plus half of it for storage
@@ -357,9 +371,9 @@ local function dropAll()
 end
 local function dockRun(why)
   ping(why or "heading home", true)
-  if inQ(P.x, P.z) then tidy(); horiz("z", Q.z); horiz("x", Q.x) end    -- back along rows already dug
+  if inQ(P.x, P.z) then tidy(); horiz("z", S.z); horiz("x", S.x) end    -- back along rows already dug
   vert(lane())
-  useDock("drop" .. ((JOB.n <= 2) and 1 or 2), dropDock(), dropAll)
+  useDock("drop" .. dropNo(), dropDock(), dropAll)
   updateNeeds()
   useDock("fuel", CONF.fuelChest, fuelStop)
 end
@@ -380,9 +394,11 @@ local function setup()
   print("(" .. CONF.fuelChest.x .. " " .. CONF.fuelChest.y .. " " .. CONF.fuelChest.z .. ").")
   local n
   repeat
-    write("Turtle number (1-4)? ")
+    print("1-4 = top of chunks 1-4, 5-8 = their bottom")
+    print("9-12 / 13-16 = the next 4 chunks south")
+    write("Turtle number (1-16)? ")
     n = tonumber(read())
-  until n and n >= 1 and n <= 4 and n == math.floor(n)
+  until n and n >= 1 and n <= 16 and n == math.floor(n)
   if not (JOB and JOB.n == n) then JOB = { n = n, slice = 1, cell = 0 } end   -- re-placed: keep its progress
   os.setComputerLabel("Miner " .. n)
   burnCarried(100000)                                                      -- the starter coal
@@ -418,8 +434,8 @@ end
 
 -- ---------------------------------------------------------- mining
 local function reach(k, y)
-  if not inQ(P.x, P.z) then vert(lane()); goTo(Q.x, lane(), Q.z) end
-  if P.y ~= y then goTo(Q.x, P.y, Q.z); vert(y) end
+  if not inQ(P.x, P.z) then vert(lane()); goTo(S.x, lane(), S.z) end
+  if P.y ~= y then goTo(S.x, P.y, S.z); vert(y) end
   local x, z = cellXZ(k)
   return goTo(x, y, z)
 end
@@ -438,12 +454,18 @@ local function clearUpDown(y)
   end
 end
 local function mine()
-  Q = corner(JOB.n)
-  JOB.band = JOB.band or 1
+  local MY = HELPER and { 3 } or { 1, 2, 3 }  -- which bands are ours (helpers: just the bottom)
+  local total = 0
+  for _, bi in ipairs(MY) do total = total + #slicesOf(CONF.bands[bi]) end
+  JOB.band = math.max(JOB.band or MY[1], MY[1])
   while JOB.band <= #CONF.bands do
   B = CONF.bands[JOB.band]; SL = slicesOf(B)
+  if JOB.band == 3 and JOB.slice == 1 and JOB.cell == 0 then              -- starting the bottom: is someone else on it?
+    updateNeeds()
+    if (not HELPER and HELP[CH]) or (BOTTOM[CH] and BOTTOM[CH] ~= JOB.n) then break end
+  end
   local before = 0
-  for i = 1, JOB.band - 1 do before = before + #slicesOf(CONF.bands[i]) end
+  for _, bi in ipairs(MY) do if bi < JOB.band then before = before + #slicesOf(CONF.bands[bi]) end end
   while JOB.slice <= #SL do
     if CMD == "recall" then dockRun("recalled"); park() end
     local y = SL[JOB.slice]
@@ -464,14 +486,16 @@ local function mine()
     JOB.cell = JOB.cell + 1
     if JOB.cell > 255 then JOB.cell = 0; JOB.slice = JOB.slice + 1 end
     saveJob()
-    ping("mining " .. math.floor(((before + JOB.slice - 1) * 256 + JOB.cell) * 100 / (ALLSL * 256)) .. "% (y " .. y .. ")")
+    ping("mining " .. math.floor(((before + JOB.slice - 1) * 256 + JOB.cell) * 100 / (total * 256)) .. "% (y " .. y .. ")")
     end
   end
   JOB.band, JOB.slice, JOB.cell = JOB.band + 1, 1, 0                -- next band down / up
   saveJob()
   end
   dockRun("finished")
-  park("DONE - this chunk is mined out")
+  park(HELPER and "DONE - bottom of chunk " .. CH .. " is mined out" or
+    ((JOB.band <= 3 and (HELP[CH] or BOTTOM[CH])) and ("DONE - the top; turtle " .. tostring(BOTTOM[CH] or JOB.n + 4) .. " has the bottom")
+      or "DONE - this chunk is mined out"))
 end
 
 -- ---------------------------------------------------------- start
@@ -485,9 +509,14 @@ local function listen()
   end
 end
 math.randomseed(os.epoch("utc") + os.getComputerID())
-if not JOB or not P then setup() end
-Q = corner(JOB.n)
-print("Miner " .. JOB.n .. ": chunk at " .. Q.x .. " " .. Q.z .. ", " .. ALLSL .. " layers of 3, grass (252) to just above bedrock")
+local function place()
+  CH, HELPER = chunkOf(JOB.n)
+  Q = corner(CH)
+  S = HELPER and { x = Q.x + 15, z = Q.z + 15 } or { x = Q.x, z = Q.z }
+end
+if JOB then place() end
+if not JOB or not P then setup(); place() end
+print("Miner " .. JOB.n .. ": chunk " .. CH .. " at " .. Q.x .. " " .. Q.z .. (HELPER and " - the bottom (y 64 to -63)" or " - grass down to y 65"))
 print("Hold Ctrl+T to stop.")
 updateNeeds()
 if modem then parallel.waitForAny(mine, listen) else mine() end

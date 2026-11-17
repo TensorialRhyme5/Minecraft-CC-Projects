@@ -116,7 +116,15 @@ local function handle(from, m)
     lastCount = -100; recount()
     local needs = {}
     for _, id in ipairs(CFG.junk) do needs[id] = 1e9 end              -- no cap: bring all of it home
-    reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = false }, m.id)   -- always split coal 50/50
+    -- which chunks have a helper turtle, and who is mining each chunk's bottom (heard from in the last 10 min)
+    local helpers, bottom = {}, {}
+    for tn, t in pairs(turtles) do
+      if os.clock() - t.at < 600 and tonumber(t.chunk) then
+        if t.helper then helpers[t.chunk] = true end
+        if t.band == 3 and (not bottom[t.chunk] or tn < bottom[t.chunk]) then bottom[t.chunk] = tn end
+      end
+    end
+    reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = false, helpers = helpers, bottom = bottom }, m.id)
   elseif m.t == "found" and m.name then
     local line = m.name .. " at " .. m.x .. " " .. m.y .. " " .. m.z .. " (turtle " .. tostring(n) .. ")"
     for _, l in ipairs(found) do if l == line then return end end
@@ -126,7 +134,8 @@ local function handle(from, m)
 end
 
 local recalled = false
-local view = nil                                -- 1-4: showing that turtle's inventory
+local view = nil                                -- a turtle number: showing what it carries
+local typed = ""                                -- digits typed so far
 local function pretty(id)
   local n = (id:match(":(.+)$") or id):gsub("_", " ")
   return (n:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
@@ -170,17 +179,28 @@ local function draw()
   term.setBackgroundColour(colors.black); term.clear(); term.setCursorPos(1, 1)
   term.setTextColour(colors.yellow); print("MINE TURTLES" .. (recalled and "   (RECALLED)" or ""))
   term.setTextColour(colors.white)
-  for n = 1, 4 do
+  local ns = {}
+  for n in pairs(turtles) do ns[#ns + 1] = n end
+  table.sort(ns)
+  local w = term.getSize()
+  local two = #ns <= 5                                -- a few turtles: two lines each; lots: one line each
+  if #ns == 0 then term.setTextColour(colors.gray); print("no turtles heard from yet") end
+  for _, n in ipairs(ns) do
     local t = turtles[n]
-    if not t then
-      term.setTextColour(colors.gray); print(n .. ": not heard from yet")
-    else
-      local age = os.clock() - t.at
-      term.setTextColour(age > 60 and colors.red or colors.lime)
-      print(n .. ": " .. tostring(t.state):sub(1, 40))
+    local age = os.clock() - t.at
+    local tag = (n < 10 and " " or "") .. n .. (t.helper and "b" or " ") .. " "
+    term.setTextColour(age > 60 and colors.red or colors.lime)
+    if two then
+      print(tag .. tostring(t.state):sub(1, w - #tag))
       term.setTextColour(colors.lightGray)
-      print("   y " .. tostring(t.y) .. "  fuel " .. tostring(t.fuel) .. "  free slots " .. tostring(t.free) ..
+      print("     y " .. tostring(t.y) .. "  fuel " .. tostring(t.fuel) .. "  free slots " .. tostring(t.free) ..
         (age > 60 and ("  (silent " .. math.floor(age) .. "s)") or ""))
+    else
+      local tail = " y" .. tostring(t.y) .. " f" .. tostring(t.fuel)
+      write(tag .. tostring(t.state):sub(1, w - #tag - #tail - 1))
+      term.setTextColour(colors.lightGray)
+      local _, cy = term.getCursorPos()
+      term.setCursorPos(w - #tail + 1, cy); print(tail)
     end
   end
   term.setTextColour(colors.white)
@@ -195,7 +215,7 @@ local function draw()
   if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
-  print("R recall  G back to work  U update  1-4 items")
+  print("R recall G work U update  #+Enter items" .. (typed ~= "" and ("  [" .. typed .. "]") or ""))
 end
 
 local function net()
@@ -210,8 +230,10 @@ local function screen()
     local t = os.startTimer(1)
     repeat
       local ev, p = os.pullEvent()
-      if ev == "char" and view then view = nil; draw()
-      elseif ev == "char" and p:match("^[1-4]$") then view = tonumber(p); draw()
+      if (ev == "char" or ev == "key") and view then view = nil; typed = ""; draw()
+      elseif ev == "char" and p:match("^%d$") then typed = (typed .. p):sub(-2); draw()
+      elseif ev == "key" and p == keys.enter and typed ~= "" then view = tonumber(typed); typed = ""; draw()
+      elseif ev == "key" and p == keys.backspace then typed = typed:sub(1, -2); draw()
       elseif ev == "char" and (p == "r" or p == "R") then
         recalled = true; rednet.broadcast({ t = "cmd", cmd = "recall" }, PROTO)
       elseif ev == "char" and (p == "u" or p == "U") then

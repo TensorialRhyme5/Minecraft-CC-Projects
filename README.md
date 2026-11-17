@@ -119,6 +119,10 @@ take turns at the chests (the mine computer gives out the turns).
   `mining/mine_startup.lua` as `startup.lua`. It runs the same storage program as home (titled MINE) plus a
   "Turtles" tab with each turtle's status. Press **R** there to recall them all and **G** to send them back.
   On first boot it finds the drop-off chests and the fuel chest (the wooden chest holding only coal).
+- **Turtle numbers:** 1-4 mine the top (grass to y 65) of chunks 1-4; 5-8 are helpers that mine the bottom
+  (y 64 to -63) of chunks 1-4 at the same time, from the opposite corner; 9-12 / 13-16 do the same for chunks 5-8,
+  the next 2x2 south (x -96..-65, z -2208..-2177 - force-load those too). Without a helper, a top turtle does the
+  bottom itself when it's done.
 - **Turtles:** install `mining/miner_startup.lua` as `startup.lua`, put 16 coal in the turtle, place it on
   **top of the fuel chest**, reboot, and type its number (1-4). It works out which way it faces by itself.
 - Junk (stone, cobble, deepslate, tuff, granite, diorite, andesite, dirt, gravel, ...) goes to the copper chests,

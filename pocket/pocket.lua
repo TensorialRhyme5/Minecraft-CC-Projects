@@ -734,18 +734,29 @@ do
       button("mtback", 1, H - 2, W, H - 2, "\17 BACK", C.bg, C.accent, function() MINE.tsel = nil end)
       return
     end
-    for n = 1, 4 do
+    local ns = {}
+    for n in pairs(MINE.t) do ns[#ns + 1] = n end
+    table.sort(ns)
+    if #ns == 0 then text(1, y, "no turtles heard from yet", C.dim) end
+    local two = #ns <= 5                                      -- a few: two lines each, lots: one line each
+    for i, n in ipairs(ns) do
       local t = MINE.t[n]
-      local yy = y + (n - 1) * 3
-      local age = t and now() - t.at or 999
-      local col = not t and C.dim or (age > 60 and C.bad or C.good)
-      text(1, yy, tostring(n), C.accent)
-      text(3, yy, fit(t and t.state or "not heard from yet", W - 3), col)
-      if t then
-        text(3, yy + 1, fit("y" .. tostring(t.y) .. " fuel " .. tostring(t.fuel) .. " free " .. tostring(t.free) ..
-          (age > 60 and (" (" .. math.floor(age) .. "s)") or ""), W - 3), C.dim)
+      local yy = y + (i - 1) * (two and 2 or 1)
+      if yy > y + 11 then break end
+      local age = now() - t.at
+      local col = age > 60 and C.bad or C.good
+      local tag = tostring(n) .. (t.helper and "b" or "")
+      text(1, yy, tag, C.accent)
+      if two then
+        text(#tag + 2, yy, fit(t.state or "?", W - #tag - 1), col)
+        text(#tag + 2, yy + 1, fit("y" .. tostring(t.y) .. " fuel " .. tostring(t.fuel) .. " free " .. tostring(t.free) ..
+          (age > 60 and (" (" .. math.floor(age) .. "s)") or ""), W - #tag - 1), C.dim)
+      else
+        local tail = " y" .. tostring(t.y)
+        text(#tag + 2, yy, fit(t.state or "?", W - #tag - 1 - #tail), col)
+        text(W - #tail + 1, yy, tail, C.dim)
       end
-      hit("mt" .. n, 1, yy, W, yy + 1, function() MINE.tsel = n end)
+      hit("mt" .. n, 1, yy, W, yy + (two and 1 or 0), function() MINE.tsel = n end)
     end
     y = y + 12
     if MINE.key then
