@@ -262,6 +262,9 @@ end
 
 local function isInventory(name)
   if name == CFG.input or CFG.skip[name] or isPickupName(name) then return false end
+  -- a chest touching the computer itself ("back", "left"...) can't move items over the wired network;
+  -- if it has a modem too, its network name (sophisticatedstorage:chest_3) is the one to use
+  if not name:find(":", 1, true) then return false end
   if name:find("furnace") or name:find("smoker") then return false end     -- furnaces belong to the smelter
   if name:find("dropper") then return false end                            -- droppers are the trash (over lava)
   -- machines with an inventory would eat what we "store" in them (a brewing stand burns blaze powder)
