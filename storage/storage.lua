@@ -763,6 +763,11 @@ do
           end
         end
   end
+  -- a craft that failed part-way: its ingredients go from the pickup back into storage
+  function SM.giveBack(need)
+    if not SM.returnToStorage then return end
+    for id in pairs(need or {}) do pcall(SM.returnToStorage, id) end
+  end
   -- why an ingredient couldn't all go into the pickup: a really full barrel, or not enough in storage
   function SM.whyShort(id, pk, want, got)
     if pk then
@@ -1566,9 +1571,9 @@ local function autoCraft(t)
       local got = retrieve(R.id[it], n)
       need[SM.realId(R.id[it])] = (need[SM.realId(R.id[it])] or 0) + n
       if got < n then sleep(0.1); scan(); got = got + retrieve(R.id[it], n - got) end   -- counts were out of date: once more
-      if got < n then return made, SM.whyShort(R.id[it], currentPickup(), n, got) end
+      if got < n then SM.giveBack(need); return made, SM.whyShort(R.id[it], currentPickup(), n, got) end
     end
-    if not arrangePickup(pk, need) then return made, "pickup is too full to sort" end
+    if not arrangePickup(pk, need) then SM.giveBack(need); return made, "pickup is too full to sort" end
     jobCounter = jobCounter + 1
     local cells = {}
     for cell, it in pairs(assign) do
@@ -1585,8 +1590,8 @@ local function autoCraft(t)
       local from, msg = rednet.receive(PROTO, math.max(0.1, deadline - os.clock()))
       if from == id and type(msg) == "table" and msg.type == "done" and msg.job == jobCounter then reply = msg end
     until reply or os.clock() >= deadline
-    if not reply then return made, "the crafter turtle didn't answer" end
-    if not reply.ok then return made, reply.err or "craft failed" end
+    if not reply then SM.giveBack(need); return made, "the crafter turtle didn't answer" end
+    if not reply.ok then SM.giveBack(need); return made, reply.err or "craft failed" end
     made = made + (reply.made or 0)
     remaining = remaining - k
   end
@@ -1743,6 +1748,7 @@ local function pickupToStorage(id)
     end
   end
 end
+SM.returnToStorage = pickupToStorage
 
 local function chainCraft(t)
   scan()
