@@ -779,11 +779,19 @@ do
       local it = MINE.sel
       text(2, 4, fit(it.name, W - 2), C.accent)
       text(2, 6, "In the mine: ", C.dim); text(15, 6, commas(it.count), C.cyan)
-      text(2, 8, "Send to the MINE barrel:", C.dim)
       local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
+      text(2, 8, "Send HOME:", C.dim)
       for i, a in ipairs(amounts) do
         local x = 2 + (i - 1) * 6
-        button("mn" .. a[1], x, 10, x + 4, 12, a[1], C.bg, C.good, function()
+        button("mh" .. a[1], x, 9, x + 4, 10, a[1], C.bg, C.accent, function()
+          send({ type = "send", id = it.id, n = a[2], to = "home" }); MINE.note = "Sending " .. a[1] .. " " .. it.name .. " home"
+        end)
+      end
+      if MINE.info and MINE.info.dim == false then text(2, 11, "(no dimensional chest)", C.bad) end
+      text(2, 12, "Send to the MINE barrel:", C.dim)
+      for i, a in ipairs(amounts) do
+        local x = 2 + (i - 1) * 6
+        button("mn" .. a[1], x, 13, x + 4, 14, a[1], C.bg, C.good, function()
           send({ type = "send", id = it.id, n = a[2], to = "pickup" }); MINE.note = "Sending " .. a[1] .. " " .. it.name
         end)
       end

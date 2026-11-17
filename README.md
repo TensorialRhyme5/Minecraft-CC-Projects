@@ -132,3 +132,16 @@ take turns at the chests (the mine computer gives out the turns).
 - Blocks a diamond pickaxe can't break (Allthemodium ore) are skipped and listed in `mine_ores.txt`.
 - Never breaks anything in the base chunk (x -96..-81, z -2256..-2241, y 240+). The space above the drop-off and
   fuel chests must be open to the sky.
+
+## Quarry -> home transfers (DimStorage)
+
+Put a **Dimensional Chest** on each storage network (one at the mine, one at home, same frequency, each on a
+wired modem). Nothing moves by itself:
+
+- **Home screen:** tap **QUARRY** in the search bar to search the mine's storage, tap an item, then SEND HOME
+  1 / 16 / 64 / ALL. Pair once first: on the MINE storage screen tap REMOTES and a name, then tap that code
+  into the pad on the home screen.
+- **Pocket:** MINE tab, ITEMS, tap an item, **Send HOME**.
+- The mine drops the items into its dimensional chest (refilling it as home empties it); the home storage
+  treats its dimensional chest as an input and puts everything away. Neither storage ever stores into them.
+- The mine computer needs an **ender modem** so home can reach it across dimensions.

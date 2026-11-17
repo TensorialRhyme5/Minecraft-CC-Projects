@@ -277,6 +277,7 @@ local function isInventory(name)
   -- a chest touching the computer itself ("back", "left"...) can't move items over the wired network;
   -- if it has a modem too, its network name (sophisticatedstorage:chest_3) is the one to use
   if not name:find(":", 1, true) then return false end
+  if name:find("dimensional", 1, true) then return false end          -- DimStorage chest = the quarry link
   if name:find("furnace") or name:find("smoker") then return false end     -- furnaces belong to the smelter
   if name:find("dropper") then return false end                            -- droppers are the trash (over lava)
   -- machines with an inventory would eat what we "store" in them (a brewing stand burns blaze powder)
@@ -296,8 +297,15 @@ end
 
 local function findStorages()
   storages = {}
+  CFG.dim = nil
   for _, name in ipairs(peripheral.getNames()) do
     if isInventory(name) then storages[#storages + 1] = name end
+    if name:find("dimensional", 1, true) and peripheral.hasType(name, "inventory") then
+      CFG.dim = CFG.dim or name
+      if CFG.title ~= "MINE" and not CFG.skip[name] then           -- home: items from the quarry arrive here
+        CFG.skip[name] = true; CFG.inputs[#CFG.inputs + 1] = name
+      end
+    end
   end
   table.sort(storages)
   for _, name in ipairs(storages) do                     -- show anything odd we're storing into, so it can be spotted
@@ -1585,11 +1593,11 @@ local busy = nil              -- progress text while organizing / crafting
 local function queue(t) tasks[#tasks + 1] = t; os.queueEvent("storage_task") end
 SM.queueTrash = queue
 
-local function retrieve(id, want)
+local function retrieve(id, want, to)
   if #SM.tried > 20 then SM.tried = {} end
   local e = id:find("#", 1, true) and index[id] or byName[id]   -- a plain id means "any copy" (recipes)
   if not e then return 0 end
-  local target = currentPickup()
+  local target = to or currentPickup()
   if not target then return 0, "no barrel or backpack connected" end
   local moved = 0
   for _, l in ipairs(e.locs) do
@@ -2169,12 +2177,19 @@ end
 local function drawSearchBar()
   fill(LX1, 5, LX2, 5, PANEL)
   local rec = UI.mode == "recipes"
-  local q = UI.search == "" and (rec and "search recipes" or "tap letters or type to search") or UI.search
-  text(LX1 + 1, 5, "Search:", YELLOW, PANEL)
-  local qtxt = fit(q, LX2 - LX1 - 58) .. (UI.search ~= "" and "_" or "")
+  local qry = UI.mode == "quarry"
+  local q = UI.search == "" and (rec and "search recipes" or qry and "search the quarry" or "tap letters or type to search") or UI.search
+  text(LX1 + 1, 5, qry and "Quarry:" or "Search:", qry and ORANGE or YELLOW, PANEL)
+  local qtxt = fit(q, LX2 - LX1 - 71) .. (UI.search ~= "" and "_" or "")
+  if CFG.title ~= "MINE" then
+    button("quarry", LX2 - 60, 5, LX2 - 50, 5, qry and "ITEMS" or "QUARRY", BLACK, qry and CYAN or ORANGE, function()
+      setMode(qry and "items" or "quarry")
+    end)
+  end
+  if qry then return end
   text(LX1 + 9, 5, qtxt, UI.search == "" and GRAY or WHITE, PANEL)
   if UI.didYouMean then
-    local room = LX2 - 48 - (LX1 + 9 + #qtxt + 2)
+    local room = LX2 - 61 - (LX1 + 9 + #qtxt + 2)
     local dym = (room >= #UI.didYouMean + 17) and ("did you mean " .. UI.didYouMean .. "?") or ("-> " .. UI.didYouMean .. "?")
     if room > 6 then text(LX1 + 9 + #qtxt + 2, 5, fit(dym, room), CYAN, PANEL) end
   end
@@ -2673,14 +2688,176 @@ local function drawRecipe()
   button("rclose", RX2 - 11, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.rsel = nil end)
 end
 
+-- ---------------------------------------------------------- QUARRY page (home): search the mine, send things home
+-- Signed requests to the mine storage over its own channel (paired once with a code from the MINE screen).
+-- The mine drops what you ask for into its dimensional chest; ours (an extra input) puts it away here.
+do
+  local QY = { results = {}, found = 0, page = 1, code = "", lookAt = -100, at = 0, changedAt = 0 }
+  SM.QY = QY
+  local FILE, PROTO = "quarry_pairing.txt", "minestore"
+  if fs.exists(FILE) then
+    local f = fs.open(FILE, "r"); local ok, d = pcall(textutils.unserialize, f.readAll()); f.close()
+    if ok and type(d) == "table" and type(d.key) == "string" then QY.key, QY.sid = d.key, d.sid end
+  end
+  local last = 0
+  local function nextCtr() local c = os.epoch("utc"); if c <= last then c = last + 1 end; last = c; return c end
+  local function canonQ(m)
+    return table.concat({ tostring(m.type), tostring(m.q or ""), tostring(m.id or ""), tostring(m.n or ""), tostring(m.to or ""),
+      tostring(m.off or ""), tostring(m.lim or "") }, "|")
+  end
+  local function send(m)
+    if not QY.id or not QY.key then return end
+    m.dev = os.getComputerID(); m.ctr = nextCtr()
+    m.mac = sha256(QY.key .. "|" .. m.ctr .. "|" .. canonQ(m))
+    rednet.send(QY.id, m, PROTO)
+  end
+  local function perPage() return (H - 4 - 7 + 1) * 2 end
+  function QY.search()
+    QY.q, QY.at = UI.search, now()
+    send({ type = "search", q = UI.search, off = (QY.page - 1) * perPage(), lim = perPage() })
+  end
+  local function pair()
+    if #QY.code ~= 8 then return end
+    local dev, nonce = os.getComputerID(), tostring(math.random(1, 2 ^ 30)) .. tostring(os.epoch("utc"))
+    QY.pairing, QY.pairAt, QY.msg = QY.code, now(), "Pairing..."
+    rednet.broadcast({ type = "pair", dev = dev, nonce = nonce, proof = sha256(QY.code .. "|pair|" .. dev .. "|" .. nonce) }, PROTO)
+  end
+  function QY.net(from, m)
+    if type(m) ~= "table" then return end
+    if m.dev ~= nil and tonumber(m.dev) ~= os.getComputerID() then return end
+    if m.type == "paired" then
+      if m.ok and QY.pairing then
+        QY.key = sha256(QY.pairing .. "|key|" .. os.getComputerID()); QY.sid, QY.id = from, from
+        local f = fs.open(FILE, "w"); f.write(textutils.serialize({ key = QY.key, sid = from })); f.close()
+        QY.code, QY.pairing, QY.msg = "", nil, nil
+        setStatus("Paired with the quarry", LIME); QY.search()
+      elseif QY.pairing then QY.why = tostring(m.why or "?") end
+    elseif m.type == "denied" then
+      if m.why == "not paired" and (not QY.sid or QY.sid == from) then
+        QY.key = nil; if fs.exists(FILE) then fs.delete(FILE) end; QY.msg = "The quarry removed us - pair again"
+      end
+    else
+      QY.id = from
+      if m.type == "results" and m.q == QY.q and (m.off or 0) == (QY.page - 1) * perPage() then
+        QY.results, QY.found, QY.got = m.items or {}, m.found or 0, true
+      end
+      if m.type == "results" or m.type == "info" then QY.info = m end
+    end
+  end
+  function QY.tick()
+    if QY.pairing and now() - QY.pairAt > 5 then QY.pairing = nil; QY.msg = "Failed: " .. (QY.why or "no reply from the mine"); QY.why = nil end
+    if UI.mode ~= "quarry" then return end
+    if not QY.id and now() - QY.lookAt > 5 then
+      QY.lookAt = now()
+      local ids = { rednet.lookup(PROTO) }
+      for _, x in ipairs(ids) do if x == QY.sid then QY.id = x end end
+      QY.id = QY.id or ids[1]
+    end
+    if UI.search ~= QY.seen then QY.seen, QY.changedAt, QY.page, QY.sel = UI.search, now(), 1, nil end
+    if QY.key and QY.id and ((QY.q ~= UI.search and now() - QY.changedAt > 0.4) or now() - QY.at > 5) then QY.search() end
+  end
+  function QY.loop()
+    if CFG.title == "MINE" then while true do sleep(3600) end end
+    while true do
+      local from, m = rednet.receive(PROTO, 1)
+      if m then QY.net(from, m) end
+      QY.tick()
+    end
+  end
+
+  function QY.drawList()
+    local top, bottom = 7, H - 4
+    local rows = bottom - top + 1
+    local colW = math.floor((LX2 - LX1 - 1) / 2)
+    local pages = math.max(1, math.ceil(QY.found / perPage()))
+    local msg
+    if not QY.key then msg = "Not paired with the quarry yet - use the pad"
+    elseif not QY.id then msg = "Looking for the quarry (needs an ender modem)..."
+    elseif #QY.results == 0 then msg = QY.got and "Nothing at the quarry matches" or "Asking the quarry..." end
+    if msg then text(LX1 + 2, top + 1, fit(msg, LX2 - LX1 - 3), GRAY) end
+    for i, it in ipairs(QY.results) do
+      if i > perPage() then break end
+      local col = (i <= rows) and 0 or 1
+      local y = top + (i - 1) % rows
+      local x = LX1 + col * (colW + 1)
+      local sel = QY.sel and QY.sel.id == it.id
+      local bg = sel and HILITE or ((i % 2 == 0) and BLACK or PANEL)
+      fill(x, y, x + colW - 1, y, bg)
+      local cnt = commas(it.count)
+      text(x + 1, y, slide(it.name, colW - #cnt - 4), sel and YELLOW or WHITE, bg)
+      text(x + colW - #cnt - 1, y, cnt, ORANGE, bg)
+      hit("q:" .. it.id, x, y, x + colW - 1, y, function() QY.sel = (sel and nil) or it end)
+    end
+    local py = H - 2
+    button("qprev", LX1, py, LX1 + 9, H, string.char(17) .. " PREV", YELLOW, QY.page > 1 and GRAY or PANEL,
+      function() if QY.page > 1 then QY.page = QY.page - 1; QY.search() end end)
+    button("qnext", LX2 - 9, py, LX2, H, "NEXT " .. string.char(16), YELLOW, QY.page < pages and GRAY or PANEL,
+      function() if QY.page < pages then QY.page = QY.page + 1; QY.search() end end)
+    local pg = "QUARRY  page " .. QY.page .. "/" .. pages .. "   " .. QY.found .. " found"
+    text(LX1 + math.floor((LX2 - LX1 - #pg) / 2), py, pg, ORANGE)
+    local st = QY.info and (QY.info.busy or QY.info.status)
+    if st and st ~= "" then st = "Quarry: " .. st; text(LX1 + math.floor((LX2 - LX1 - math.min(#st, LX2 - LX1 - 24)) / 2), H, fit(st, LX2 - LX1 - 24), LGRAY) end
+  end
+
+  local PAD = { "ABCDEFGH", "JKLMNPQR", "STUVWXYZ", "23456789" }
+  function QY.drawPanel()
+    if not QY.key then
+      text(RX1, 6, "PAIR WITH THE QUARRY", ORANGE)
+      text(RX1, 8, "On the MINE storage screen tap", LGRAY)
+      text(RX1, 9, "REMOTES, then a name button.", LGRAY)
+      text(RX1, 10, "Tap the code it shows here:", LGRAY)
+      fill(RX1, 12, RX2, 14, HILITE)
+      local shown = QY.code:sub(1, 4) .. (#QY.code > 4 and ("-" .. QY.code:sub(5)) or "") .. (#QY.code < 8 and "_" or "")
+      text(RX1 + math.floor((RX2 - RX1 + 1 - #shown * 2) / 2), 13, (shown:gsub(".", "%0 ")), YELLOW, HILITE)
+      local y = 16
+      for _, row in ipairs(PAD) do
+        for i = 1, #row do
+          local ch = row:sub(i, i)
+          local x = RX1 + (i - 1) * 5
+          button("qk" .. ch, x, y, x + 3, y + 2, ch, WHITE, GRAY, function() if #QY.code < 8 then QY.code = QY.code .. ch end end)
+        end
+        y = y + 3
+      end
+      button("qdel", RX1, y, RX1 + 11, y + 2, "DEL", WHITE, GRAY, function() QY.code = QY.code:sub(1, -2) end)
+      button("qpair", RX1 + 13, y, RX2, y + 2, "PAIR", BLACK, #QY.code == 8 and LIME or GRAY, pair)
+      if QY.msg then text(RX1, y + 4, fit(QY.msg, RX2 - RX1 + 1), QY.msg:find("ail") and RED or LGRAY) end
+      return
+    end
+    if QY.sel then
+      local it = QY.sel
+      text(RX1, 6, fit(it.name, RX2 - RX1 + 1), YELLOW)
+      text(RX1, 8, "At the quarry:", LGRAY); text(RX1 + 15, 8, commas(it.count), ORANGE)
+      text(RX1, 11, "SEND HOME", ORANGE)
+      for i, a in ipairs({ { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }) do
+        local x = RX1 + (i - 1) * 10
+        button("qs" .. a[1], x, 13, x + 8, 15, a[1], BLACK, LIME, function()
+          send({ type = "send", id = it.id, n = a[2], to = "home" })
+          setStatus("Asked the quarry for " .. a[1] .. " " .. it.name, CYAN)
+        end)
+      end
+      local y = 18
+      text(RX1, y, "It lands in the dimensional chest", LGRAY)
+      text(RX1, y + 1, "and gets put away here.", LGRAY)
+      if not CFG.dim then text(RX1, y + 3, "No dimensional chest here yet!", RED) end
+      if QY.info and QY.info.dim == false then text(RX1, y + 4, "The mine has no dimensional chest!", RED) end
+      button("qback", RX1, H - 3, RX2, H - 1, string.char(17) .. " BACK", BLACK, YELLOW, function() QY.sel = nil end)
+      return
+    end
+    local y = drawKeyboard(6)
+    text(RX1, y + 1, "Tap an item to send some home.", LGRAY)
+    if not CFG.dim then text(RX1, y + 3, "Connect a dimensional chest here", RED); text(RX1, y + 4, "(same frequency as the mine's).", RED) end
+  end
+end
+
 local function draw()
   clear(); hits = {}
   layout()
   drawHeader()
   drawSearchBar()
-  drawList()
+  if UI.mode == "quarry" then SM.QY.drawList() else drawList() end
   for y = 5, H do setCell(RX1 - 2, y, "\149", YELLOW, BLACK) end
-  if UI.mode == "recipes" and UI.rsel then drawRecipe()
+  if UI.mode == "quarry" then SM.QY.drawPanel()
+  elseif UI.mode == "recipes" and UI.rsel then drawRecipe()
   elseif UI.mode == "items" and UI.selected then drawDetail()
   else
     if UI.panel == "remotes" then drawRemotes()
@@ -2753,7 +2930,7 @@ local function searchFor(q, offset, limit)
 end
 local function netInfo(player)
   local who = owners()
-  return { type = "info", status = status.msg, busy = busy, im = #who > 0, owner = player or who[1], owners = who,
+  return { type = "info", status = status.msg, busy = busy, im = #who > 0, owner = player or who[1], owners = who, dim = CFG.dim ~= nil,
     used = stats.used, slots = stats.slots, total = stats.total, types = stats.types }
 end
 -- every request must be signed with the key made at pairing (the code itself is never sent)
@@ -2804,7 +2981,8 @@ local function netServer()
         elseif msg.type == "send" and type(msg.id) == "string" then
           local n = tonumber(msg.n) or 1
           local name = data.names[msg.id] or prettyId(msg.id)
-          if msg.to == "pickup" then queue({ kind = "retrieve", id = msg.id, n = n })
+          if msg.to == "home" and CFG.title == "MINE" then queue({ kind = "sendhome", id = msg.id, n = n, name = name })
+          elseif msg.to == "pickup" then queue({ kind = "retrieve", id = msg.id, n = n })
           else queue({ kind = "tome", id = msg.id, n = n, name = name, player = r.player }) end
           setStatus("Pocket: sending " .. (n == math.huge and "all" or n) .. " " .. name, CYAN)
           rednet.send(from, netInfo(r.player), NET_PROTO)
@@ -2910,6 +3088,24 @@ local function worker()
       elseif t.kind == "trash" then
         SM.trash(t, function(m) busy = m end)
         busy = nil
+      elseif t.kind == "sendhome" then
+        -- through the dimensional chest; home takes things out as they arrive, so keep feeding it
+        local sent, idle = 0, 0
+        if not CFG.dim then setStatus("No dimensional chest at the mine - can't send home", RED) end
+        while CFG.dim and sent < t.n and idle < 30 do
+          busy = "Sending " .. t.name .. " home: " .. commas(sent) .. (t.n ~= math.huge and ("/" .. commas(t.n)) or "")
+          local got = retrieve(t.id, t.n - sent, CFG.dim)
+          sent = sent + got
+          scan()
+          local left = byName[t.id] and byName[t.id].count or 0
+          if left <= 0 then break end
+          if got == 0 then idle = idle + 1; pcall(SM.sortInput); sleep(2) else idle = 0 end
+        end
+        busy = nil
+        if CFG.dim then
+          setStatus(sent > 0 and ("Sent " .. commas(sent) .. " " .. t.name .. " home" .. (idle >= 30 and " (home stopped taking them)" or ""))
+            or ("Couldn't send " .. t.name .. " home (none here, or the link chest is full)"), sent > 0 and LIME or RED)
+        end
       elseif t.kind == "retrieve" then
         local n, why = retrieve(t.id, t.n)
         local name = data.names[t.id] or prettyId(t.id)
@@ -3024,7 +3220,7 @@ local function smeltLoop()
     SM.tick()
   end
 end
-parallel.waitForAny(ui, worker, netServer, smeltLoop, function()
+parallel.waitForAny(ui, worker, netServer, smeltLoop, SM.QY.loop, function()
   loadRecipes(); rebuildList()
   findCrafter(true)
   statusLoop()
