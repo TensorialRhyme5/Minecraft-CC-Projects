@@ -156,12 +156,14 @@ local function sendPair()
   UI.pairing, UI.pairAt, UI.pairTries = code, now(), (UI.pairTries or 0) + 1
   UI.pairMsg = "Pairing..." .. (UI.pairTries > 1 and (" (try " .. UI.pairTries .. ")") or "")
   local msg = { type = "pair", dev = dev, nonce = nonce, proof = sha256(code .. "|pair|" .. dev .. "|" .. nonce) }
-  if S.id then rednet.send(S.id, msg, STORE_PROTO) else rednet.broadcast(msg, STORE_PROTO) end
+  rednet.broadcast(msg, STORE_PROTO)              -- only the storage showing this code will say yes
 end
 local function findStorage()
   S.lookAt = now()
-  local id = rednet.lookup(STORE_PROTO)
-  if type(id) == "table" then id = id[1] end
+  local ids = { rednet.lookup(STORE_PROTO) }
+  if type(ids[1]) == "table" then ids = ids[1] end
+  local id = ids[1]
+  for _, x in ipairs(ids) do if PAIRED and PAIRED.sid == x then id = x end end   -- the storage we paired with
   S.id = id
 end
 local ROWS = 13                         -- result rows on screen (set properly below)
@@ -702,7 +704,7 @@ local function main()
         if UI.pairTries < 3 then S.id = nil; sendPair()
         else
           UI.pairing, UI.pairTries = nil, 0
-          UI.pairMsg = "Failed: no reply"
+          UI.pairMsg = "Failed: " .. (UI.pairWhy or "no reply"); UI.pairWhy = nil
         end
         draw(t)
       end
@@ -753,18 +755,26 @@ local function main()
         -- a reply meant for another pocket: ignore
       elseif c == STORE_PROTO and type(msg) == "table" and msg.type == "paired" then
         if msg.ok and UI.pairing then
-          PAIRED = { key = sha256(UI.pairing .. "|key|" .. os.getComputerID()), player = msg.player }
+          PAIRED = { key = sha256(UI.pairing .. "|key|" .. os.getComputerID()), player = msg.player, sid = a }
           local f = fs.open(KEYFILE, "w"); f.write(textutils.serialize(PAIRED)); f.close()
           S.id, UI.code, UI.pairing, UI.pairMsg, UI.pairTries = a, "", nil, nil, 0
           search()
-        else
-          UI.pairing, UI.pairTries = nil, 0
-          UI.pairMsg = "Pairing failed: " .. tostring(msg.why or "?")
+        elseif UI.pairing then
+          UI.pairWhy = tostring(msg.why or "?")      -- another storage may still say yes: keep waiting
         end
       elseif c == STORE_PROTO and type(msg) == "table" and msg.type == "denied" then
-        if msg.why == "not paired" then PAIRED = nil; fs.delete(KEYFILE); UI.pairMsg = "This pocket was removed - pair again" end
+        if msg.why == "not paired" and a == S.id and (not PAIRED or not PAIRED.sid or PAIRED.sid == a) then
+          PAIRED = nil; fs.delete(KEYFILE); UI.pairMsg = "This pocket was removed - pair again"
+        elseif PAIRED and PAIRED.sid and a ~= PAIRED.sid then S.id = nil   -- wrong storage answered: look again
+        end
+      elseif c == STORE_PROTO and type(msg) == "table" and PAIRED and PAIRED.sid and a ~= PAIRED.sid then
+        -- another storage (the mine): not ours
       elseif c == STORE_PROTO and type(msg) == "table" then
         S.id = a
+        if PAIRED and not PAIRED.sid and (msg.type == "results" or msg.type == "info") then   -- remember who answers us
+          PAIRED.sid = a
+          local f = fs.open(KEYFILE, "w"); f.write(textutils.serialize(PAIRED)); f.close()
+        end
         if msg.type == "results" then
           if msg.q == UI.q and (msg.off or 0) == (UI.page - 1) * ROWS then S.results, S.found, S.got = msg.items or {}, msg.found or 0, true end
           if UI.sel then for _, it in ipairs(msg.items or {}) do if it.id == UI.sel.id then UI.sel.count = it.count end end end

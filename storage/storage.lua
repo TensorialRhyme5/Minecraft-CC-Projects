@@ -2660,6 +2660,7 @@ local function verify(msg)
 end
 local function netServer()
   openNet()
+  if CFG.title == "MINE" and not CFG.pockets then while true do sleep(3600) end end   -- pockets talk to home only
   pcall(rednet.host, NET_PROTO, "storage_" .. os.getComputerID())
   while true do
     local from, msg = rednet.receive(NET_PROTO)
@@ -2673,8 +2674,8 @@ local function netServer()
           setStatus("Paired pocket remote " .. remoteName(dev) .. (PAIR.player and (" for " .. PAIR.player) or ""), LIME)
           PAIR.code = nil
           rednet.send(from, { type = "paired", ok = true, player = data.remotes[dev].player, dev = dev }, NET_PROTO)
-        else
-          rednet.send(from, { type = "paired", ok = false, dev = dev, why = PAIR.code and "wrong code" or "no pairing code is showing" }, NET_PROTO)
+        elseif PAIR.code then                  -- (a storage that isn't showing a code stays quiet)
+          rednet.send(from, { type = "paired", ok = false, dev = dev, why = "wrong code" }, NET_PROTO)
         end
       else
         local r, why = verify(msg)
