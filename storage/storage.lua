@@ -740,16 +740,32 @@ do
   -- stop just one item: forget its jobs and take it back out of every furnace
   local function cancel(id)
     local back = 0
+    -- every job, held item and pending choice for it goes; an ALWAYS rule would just start it again, so that goes too
     for i = #SM.jobs, 1, -1 do if SM.jobs[i].id == id then table.remove(SM.jobs, i) end end
-    for _, f in ipairs(SM.furnaces) do
-      local ok, l = pcall(peripheral.call, f.name, "list")
-      if ok and type(l) == "table" then
-        if l[3] then storeFrom(f.name, 3, l[3].name, l[3].count) end
-        if l[1] and l[1].name == id then back = back + storeFrom(f.name, 1, id, l[1].count); f.cur, f.n = nil, 0 end
-      end
-    end
     for i = #data.smeltHeld, 1, -1 do if data.smeltHeld[i].id == id then table.remove(data.smeltHeld, i); dirty = true end end
-    setStatus("Stopped smelting " .. nameOf(id) .. " - " .. commas(back) .. " put back in storage", YELLOW)
+    SM.once[id] = nil
+    local forgot = data.smeltRule[id] == "always"
+    if forgot then data.smeltRule[id] = nil; dirty = true end
+    -- take it out of every furnace (a few passes, until none has any left)
+    for _ = 1, 5 do
+      local still = false
+      for _, f in ipairs(SM.furnaces) do
+        local ok, l = pcall(peripheral.call, f.name, "list")
+        if ok and type(l) == "table" then
+          if l[3] then storeFrom(f.name, 3, l[3].name, l[3].count) end
+          if l[1] and l[1].name == id then
+            local n = storeFrom(f.name, 1, id, l[1].count)
+            back = back + n
+            if n < l[1].count then still = true end
+            f.cur, f.n = nil, 0
+          end
+        end
+      end
+      if not still then break end
+      sleep(0.2)
+    end
+    setStatus("Stopped all smelting of " .. nameOf(id) .. " - " .. commas(back) .. " put back in storage" ..
+      (forgot and " (and its ALWAYS rule removed)" or ""), YELLOW)
   end
   function SM.doRequest()
     local what = SM.req
