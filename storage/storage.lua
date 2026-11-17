@@ -1925,7 +1925,6 @@ local function drawDetail()
     text(RX2 - #n, 11 + i, n, CYAN, PANEL)
   end
   if #invs > 5 then text(RX1 + 1, 17, "+" .. (#invs - 5) .. " more", GRAY, PANEL) end
-  SM.doubleButton(id, RX1, 18, RX2)
   -- retrieve
   local _, kind = currentPickup()
   local who = owners()

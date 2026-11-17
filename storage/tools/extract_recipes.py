@@ -183,7 +183,9 @@ CRAFT_TYPES = {
 
 def parse_recipe(rid, j):
     t = str(j.get('type', ''))
-    double = t in CRAFT_TYPES and rid.startswith('sophisticatedstorage:double_')
+    if t in CRAFT_TYPES and rid.startswith('sophisticatedstorage:double_'):
+        return None        # double chests are upgrades of chests that are already double; left out to keep things simple
+    double = False
     if t in CRAFT_TYPES:
         t = 'minecraft:crafting_shaped' if ('pattern' in j and 'key' in j) else 'minecraft:crafting_shapeless'
     if t in ('minecraft:smelting', 'minecraft:blasting', 'smelting', 'blasting'):
