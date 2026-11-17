@@ -958,13 +958,13 @@ do
       local ts = eta and ("~" .. fmtTime(eta)) or "no furnace for it"
       text(RX1 + 1, y + 1, fit("\26 " .. outName .. "  (" .. how .. ")", RX2 - RX1 - #ts - 1), LGRAY)
       text(RX2 - #ts + 1, y + 1, ts, eta and CYAN or RED)
-      local bx = RX1
-      local function b(label, bg, fg, fn) button("sm" .. label .. id, bx, y + 2, bx + bw - 1, y + 2, label, fg, bg, fn); bx = bx + bw + 1 end
-      b("SMELT", LIME, BLACK, function() SM.once[id] = "smelt"; os.queueEvent("storage_task") end)
-      b("STORE", GRAY, WHITE, function() SM.once[id] = "store"; os.queueEvent("storage_task") end)
-      b("ALWAYS", CYAN, BLACK, function() data.smeltRule[id] = "always"; dirty = true; os.queueEvent("storage_task") end)
-      b("NEVER", RED, WHITE, function() data.smeltRule[id] = "never"; dirty = true; os.queueEvent("storage_task") end)
-      y = y + 4
+      -- this batch only (top row) / remember for this item (bottom row)
+      local hw = math.floor((RX2 - RX1) / 2)
+      button("smSMELT" .. id, RX1, y + 2, RX1 + hw - 1, y + 2, "SMELT", BLACK, LIME, function() SM.once[id] = "smelt"; os.queueEvent("storage_task") end)
+      button("smSTORE" .. id, RX1 + hw + 1, y + 2, RX2, y + 2, "STORE", WHITE, GRAY, function() SM.once[id] = "store"; os.queueEvent("storage_task") end)
+      button("smALWAYS" .. id, RX1, y + 3, RX1 + hw - 1, y + 3, "ALWAYS SMELT", BLACK, CYAN, function() data.smeltRule[id] = "always"; dirty = true; os.queueEvent("storage_task") end)
+      button("smNEVER" .. id, RX1 + hw + 1, y + 3, RX2, y + 3, "ALWAYS STORE", WHITE, RED, function() data.smeltRule[id] = "never"; dirty = true; os.queueEvent("storage_task") end)
+      y = y + 5
     end
     if #ids > 1 then
       button("small", RX1, y, RX1 + bw * 2, y, "SMELT ALL", BLACK, LIME, function()
@@ -978,13 +978,13 @@ do
     for id, r in pairs(data.smeltRule) do rules[#rules + 1] = { id = id, r = r } end
     table.sort(rules, function(a, b) return a.id < b.id end)
     local ry = math.max(y + 1, H - 9)
-    text(RX1, ry, "REMEMBERED (tap X to forget)", YELLOW)
+    text(RX1, ry, "ALWAYS... (tap X to forget)", YELLOW)
     ry = ry + 1
     if #rules == 0 then text(RX1, ry, "none", GRAY) end
     for _, e in ipairs(rules) do
       if ry > H - 4 then break end
-      text(RX1, ry, e.r == "always" and "ALWAYS" or "NEVER", e.r == "always" and CYAN or RED)
-      text(RX1 + 7, ry, fit(nameOf(e.id), RX2 - RX1 - 10), WHITE)
+      text(RX1, ry, e.r == "always" and "SMELT" or "STORE", e.r == "always" and CYAN or RED)
+      text(RX1 + 6, ry, fit(nameOf(e.id), RX2 - RX1 - 9), WHITE)
       button("smx" .. e.id, RX2 - 2, ry, RX2, ry, "X", WHITE, RED, function() data.smeltRule[e.id] = nil; dirty = true end)
       ry = ry + 1
     end

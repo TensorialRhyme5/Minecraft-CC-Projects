@@ -84,7 +84,7 @@ Connect any number of **Furnaces** and **Blast Furnaces** to the storage's wired
 right-click it so it turns red). They're never used as storage.
 
 - When something that can be smelted lands in the input chest, it **waits there** and the storage screen asks:
-  **SMELT**, **STORE**, **ALWAYS** (smelt this item from now on) or **NEVER**. Remembered choices are listed at the bottom
+  **SMELT** / **STORE** (just this batch) or **ALWAYS SMELT** / **ALWAYS STORE** (remember for this item). Remembered choices are listed at the bottom
   of the SMELTER panel (tap X to forget one).
 - Blast furnaces are used for things that can go in one (ores, raw metals); regular furnaces take everything else.
 - **Iron Furnaces** (any tier) work too and get a bigger share of each batch the faster they are. One with a
