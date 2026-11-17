@@ -39,6 +39,7 @@ local function recount()
     if isInv and (not skip[name] or fuelNames[name]) and not name:find("barrel", 1, true) then
       local ok, l = pcall(peripheral.call, name, "list")
       if ok and type(l) == "table" then
+        if fuelNames[name] then fc = fc or 0 end            -- connected, even if it's empty right now
         for _, it in pairs(l) do
           if fuelNames[name] then
             if it.name == "minecraft:coal" or it.name == "minecraft:charcoal" then fc = (fc or 0) + it.count end
@@ -101,7 +102,8 @@ local function draw()
   local busy = {}
   for d, l in pairs(locks) do busy[#busy + 1] = d .. "=" .. l.n end
   print("Chest turns: " .. (#busy > 0 and table.concat(busy, " ") or "free"))
-  print("Fuel chest: " .. (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and "  LOW - turtles keep all coal" or "")) or "not connected"))
+  print("Fuel chest: " .. (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and "  LOW - turtles keep all coal" or "")) or
+    ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
   print("R = recall all   G = go back to work")
