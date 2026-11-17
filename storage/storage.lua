@@ -290,8 +290,9 @@ local function findStorages()
     for _, w in ipairs({ "chest", "barrel", "drawer", "crate", "shulker", "storage", "backpack", "vault", "cabinet" }) do
       if name:find(w, 1, true) then plain = true; break end
     end
-    if not plain then print("Using as storage: " .. name) end
+    if not plain and not CFG.shown then print("Using as storage: " .. name) end
   end
+  CFG.shown = true                                       -- (only list them once, not on every rescan)
 end
 
 -- ---------------------------------------------------------- recipe book
