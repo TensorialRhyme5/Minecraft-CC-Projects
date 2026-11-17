@@ -59,10 +59,15 @@ local function ping(state, force)
   if state then STATE = state end
   if not modem or (not force and os.clock() - lastPing < 4) then return end
   lastPing = os.clock()
-  local free = 0
-  for s = 1, 16 do if turtle.getItemCount(s) == 0 then free = free + 1 end end
+  local free, inv, at = 0, {}, {}
+  for s = 1, 16 do
+    local d = turtle.getItemDetail(s)
+    if not d then free = free + 1
+    elseif at[d.name] then inv[at[d.name]].c = inv[at[d.name]].c + d.count
+    else inv[#inv + 1] = { id = d.name, c = d.count }; at[d.name] = #inv end
+  end
   pcall(rednet.broadcast, { t = "status", n = info(), state = STATE, x = P and P.x, y = P and P.y, z = P and P.z,
-    fuel = turtle.getFuelLevel(), slice = JOB and JOB.slice, cell = JOB and JOB.cell, free = free,
+    fuel = turtle.getFuelLevel(), slice = JOB and JOB.slice, cell = JOB and JOB.cell, free = free, inv = inv,
     label = os.getComputerLabel() }, PROTO)
 end
 local function ask(msg, timeout)

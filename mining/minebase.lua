@@ -117,7 +117,47 @@ local function handle(from, m)
 end
 
 local recalled = false
+local view = nil                                -- 1-4: showing that turtle's inventory
+local function pretty(id)
+  local n = (id:match(":(.+)$") or id):gsub("_", " ")
+  return (n:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
+end
+local function drawInv(n)
+  term.setBackgroundColour(colors.black); term.clear(); term.setCursorPos(1, 1)
+  local t = turtles[n]
+  term.setTextColour(colors.yellow); print("TURTLE " .. n .. " CARRYING")
+  if not t then term.setTextColour(colors.gray); print("not heard from yet")
+  elseif type(t.inv) ~= "table" then
+    term.setTextColour(colors.orange)
+    print("This turtle runs older code - it shows its")
+    print("items after its next restart (or press U).")
+  elseif #t.inv == 0 then term.setTextColour(colors.lightGray); print("(empty)")
+  else
+    local w = term.getSize()
+    local half = math.floor(w / 2)
+    table.sort(t.inv, function(a, b) return a.c > b.c end)
+    for i, it in ipairs(t.inv) do
+      local col = (i - 1) % 2
+      local row = math.floor((i - 1) / 2) + 3
+      local name = pretty(tostring(it.id))
+      local num = tostring(it.c)
+      name = name:sub(1, half - #num - 3)
+      term.setCursorPos(col * half + 1, row)
+      term.setTextColour(colors.white); write(name)
+      term.setCursorPos(col * half + half - #num - 1, row)
+      term.setTextColour(colors.lime); write(num)
+    end
+    term.setCursorPos(1, math.floor((#t.inv + 1) / 2) + 4)
+  end
+  if t then
+    term.setTextColour(colors.lightGray)
+    print(tostring(t.state):sub(1, 50))
+    print("free slots " .. tostring(t.free) .. "  fuel " .. tostring(t.fuel) .. "  y " .. tostring(t.y))
+  end
+  term.setTextColour(colors.gray); print("Any other key = back")
+end
 local function draw()
+  if view then return drawInv(view) end
   term.setBackgroundColour(colors.black); term.clear(); term.setCursorPos(1, 1)
   term.setTextColour(colors.yellow); print("MINE TURTLES" .. (recalled and "   (RECALLED)" or ""))
   term.setTextColour(colors.white)
@@ -146,7 +186,7 @@ local function draw()
   if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
-  print("R = recall all  G = back to work  U = update turtles")
+  print("R recall  G back to work  U update  1-4 items")
 end
 
 local function net()
@@ -161,7 +201,9 @@ local function screen()
     local t = os.startTimer(1)
     repeat
       local ev, p = os.pullEvent()
-      if ev == "char" and (p == "r" or p == "R") then
+      if ev == "char" and view then view = nil; draw()
+      elseif ev == "char" and p:match("^[1-4]$") then view = tonumber(p); draw()
+      elseif ev == "char" and (p == "r" or p == "R") then
         recalled = true; rednet.broadcast({ t = "cmd", cmd = "recall" }, PROTO)
       elseif ev == "char" and (p == "u" or p == "U") then
         rednet.broadcast({ t = "cmd", cmd = "reboot" }, PROTO)        -- they restart, grab the newest code and carry on
