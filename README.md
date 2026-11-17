@@ -89,6 +89,7 @@ right-click it so it turns red). They're never used as storage.
 - Blast furnaces are used for things that can go in one (ores, raw metals); regular furnaces take everything else.
 - **Iron Furnaces** (any tier) work too and get a bigger share of each batch the faster they are. One with a
   **Blasting augment** counts as a blast furnace; one with a **Smoking augment** is left alone (food only).
+- **SMELTING NOW** (SMELTER panel) lists each item with its own **STOP**, which takes just that item back out.
 - **EMERGENCY STOP** (SMELTER panel) pulls everything out of the furnaces back into storage and holds it, even across a
   reboot; **RESTORE** puts it all back in. While stopped, new smelting is added to the held list.
 - Fuel comes from storage automatically, **coal or charcoal only** (charcoal first). Anything else in a fuel slot

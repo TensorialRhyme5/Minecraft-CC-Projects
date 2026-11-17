@@ -621,6 +621,23 @@ do
     dirty = true
   end
   function SM.heldCount() local n = 0; for _, h in ipairs(data.smeltHeld) do n = n + h.n end return n end
+  -- { id, left (waiting + in furnaces), job } per item being smelted
+  function SM.running()
+    local by, list = {}, {}
+    for _, j in ipairs(SM.jobs) do
+      local e = by[j.id]
+      if not e then e = { id = j.id, left = 0, job = j }; by[j.id] = e; list[#list + 1] = e end
+      e.left = e.left + math.max(0, j.left)
+    end
+    for _, f in ipairs(SM.furnaces) do
+      if f.cur then
+        local e = by[f.cur]
+        if not e then e = { id = f.cur, left = 0 }; by[f.cur] = e; list[#list + 1] = e end
+        e.left = e.left + (f.n or 0)
+      end
+    end
+    return list
+  end
   function SM.add(id, n, rc)
     rc = rc or SM.info(id)
     if not rc or n <= 0 then return nil end
@@ -719,10 +736,25 @@ do
         end
   end
   -- EMERGENCY STOP / RESTORE (done by the smelter loop so it never clashes with a tick)
-  function SM.request(what) SM.req = what; os.queueEvent("smelt_tick") end
+  function SM.request(what, id) SM.req, SM.reqId = what, id; os.queueEvent("smelt_tick") end
+  -- stop just one item: forget its jobs and take it back out of every furnace
+  local function cancel(id)
+    local back = 0
+    for i = #SM.jobs, 1, -1 do if SM.jobs[i].id == id then table.remove(SM.jobs, i) end end
+    for _, f in ipairs(SM.furnaces) do
+      local ok, l = pcall(peripheral.call, f.name, "list")
+      if ok and type(l) == "table" then
+        if l[3] then storeFrom(f.name, 3, l[3].name, l[3].count) end
+        if l[1] and l[1].name == id then back = back + storeFrom(f.name, 1, id, l[1].count); f.cur, f.n = nil, 0 end
+      end
+    end
+    for i = #data.smeltHeld, 1, -1 do if data.smeltHeld[i].id == id then table.remove(data.smeltHeld, i); dirty = true end end
+    setStatus("Stopped smelting " .. nameOf(id) .. " - " .. commas(back) .. " put back in storage", YELLOW)
+  end
   function SM.doRequest()
     local what = SM.req
     SM.req = nil
+    if what == "cancel" and SM.reqId then cancel(SM.reqId); SM.reqId = nil; return end
     if what == "stop" and not data.smeltStop then
       data.smeltStop = true
       for _, j in ipairs(SM.jobs) do hold(j.id, math.max(0, j.left)) end
@@ -881,10 +913,23 @@ do
     else
       button("smstop", RX2 - 15, 6, RX2, 7, "EMERGENCY STOP", WHITE, RED, function() SM.request("stop") end)
     end
+    local y = 9
+    local act = data.smeltStop and {} or SM.running()
+    if #act > 0 then
+      text(RX1, y, "SMELTING NOW", ORANGE); y = y + 1
+      for _, a in ipairs(act) do
+        if y > 16 then text(RX1, y, "+" .. (#act - 7) .. " more", GRAY); y = y + 1; break end
+        local eta = a.job and SM.eta(a.left, a.job)
+        local line = commas(a.left) .. " " .. nameOf(a.id) .. (eta and ("  ~" .. fmtTime(eta)) or "")
+        text(RX1, y, fit(line, RX2 - RX1 - 7), WHITE)
+        button("smcancel" .. a.id, RX2 - 5, y, RX2, y, "STOP", WHITE, RED, function() SM.request("cancel", a.id) end)
+        y = y + 1
+      end
+      y = y + 1
+    end
     local ids = {}
     for id in pairs(SM.asks) do ids[#ids + 1] = id end
     table.sort(ids)
-    local y = 9
     if #ids == 0 then text(RX1, y, "nothing waiting", LGRAY); y = y + 2 end
     local bw = math.floor((RX2 - RX1 + 1 - 3) / 4)
     for _, id in ipairs(ids) do
