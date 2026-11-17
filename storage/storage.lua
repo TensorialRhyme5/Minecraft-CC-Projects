@@ -487,7 +487,7 @@ local RX1, RX2 = 83, 121             -- right panel
 -- put the results back. Crafting chains use it too (e.g. sand -> glass -> glass panes).
 local SM
 do
-  SM = { furnaces = {}, jobs = {}, asks = {}, once = {}, built = nil, noFuel = false }
+  SM = { furnaces = {}, jobs = {}, asks = {}, once = {}, built = nil, noFuel = false, tried = {}, dups = {} }
   local FUELS = { "minecraft:charcoal", "minecraft:coal" }        -- the only fuels the smelter will use
   -- ticks per item (a vanilla furnace is 200 = 10 s). Iron Furnaces tiers use the mod's default speeds.
   local TICKS = { iron = 160, gold = 120, diamond = 80, emerald = 40, obsidian = 20, crystal = 40, netherite = 5,
@@ -1349,6 +1349,27 @@ local function scan()
     end
   end
   if #jobs > 0 then parallel.waitForAll(table.unpack(jobs)) end
+  -- one chest touched by two modems shows up twice (chest_1 AND chest_7) and everything in it would be
+  -- counted double. Same size + exactly the same contents = the same chest: only read it once.
+  local sigs = {}
+  for i, name in ipairs(storages) do
+    local parts, n, kinds = {}, 0, {}
+    for slot, it in pairs(lists[i] or {}) do
+      parts[#parts + 1] = slot .. "=" .. it.name .. "x" .. it.count .. (it.nbt or "")
+      n = n + 1; kinds[it.name] = true
+      if it.count < 64 then kinds._partial = true end
+    end
+    local distinct = 0
+    for _ in pairs(kinds) do distinct = distinct + 1 end
+    if n > 0 and distinct >= 2 then                    -- (identical walls of full stacks could be real twins)
+      table.sort(parts)
+      local sig = tostring(sizes[i]) .. "|" .. table.concat(parts, ",")
+      if sigs[sig] then
+        if not SM.dups[name] then SM.dups[name] = true; print("Same chest twice: " .. name .. " = " .. sigs[sig] .. " (two modems touch it) - counting it once") end
+        lists[i], sizes[i] = {}, 0
+      else sigs[sig] = name end
+    end
+  end
   -- items that only differ by enchantments / potion type get their own entry
   local need = {}
   for i, name in ipairs(storages) do
