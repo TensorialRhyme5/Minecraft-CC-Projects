@@ -167,8 +167,23 @@ def norm_result(r):
     return None, 0
 
 
+# mods that put ordinary crafting-table recipes under their own recipe type (usually to copy data,
+# contents or upgrades across); a turtle crafts these like any other shaped/shapeless recipe
+CRAFT_TYPES = {
+    'mekanism:mek_data', 'mekanismtools:paxel',
+    'sophisticatedcore:upgrade_next_tier', 'sophisticatedstorage:storage_tier_upgrade',
+    'sophisticatedstorage:double_chest_tier_upgrade', 'sophisticatedstorage:generic_wood_storage',
+    'sophisticatedstorage:shulker_box_from_chest', 'sophisticatedstorageinmotion:moving_storage_from_storage',
+    'sophisticatedbackpacks:backpack_upgrade', 'functionalstorage:copy_components', 'actuallyadditions:copy_nbt',
+    'immersiveengineering:turn_and_copy', 'fluxnetworks:flux_storage_recipe', 'ars_nouveau:book_upgrade',
+    'pocketstorage:upgrade', 'utilityvest:upgrade',
+}
+
+
 def parse_recipe(rid, j):
     t = str(j.get('type', ''))
+    if t in CRAFT_TYPES:
+        t = 'minecraft:crafting_shaped' if ('pattern' in j and 'key' in j) else 'minecraft:crafting_shapeless'
     if t in ('minecraft:smelting', 'minecraft:blasting', 'smelting', 'blasting'):
         ing = norm_ing(j.get('ingredient'))
         out, n = norm_result(j.get('result'))

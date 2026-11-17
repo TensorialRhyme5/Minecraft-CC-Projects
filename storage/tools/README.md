@@ -12,5 +12,6 @@ node kjs_apply.js base.json <kubejs>/server_scripts final.json   # runs the pack
 python3 compact_recipes.py final.json ../recipes.txt
 ```
 
-Crafting-table (3x3 shaped/shapeless) recipes become R lines and furnace / blast furnace recipes become S lines
+Crafting-table (3x3 shaped/shapeless) recipes become R lines (including mods' own crafting-table types listed in
+`CRAFT_TYPES`, e.g. Mekanism and Sophisticated Storage tier upgrades) and furnace / blast furnace recipes become S lines
 (`S out count f|b group`). Other machine recipes are skipped.
