@@ -58,10 +58,14 @@ local function resort()
   if os.clock() - lastFix < 15 then return end
   lastFix = os.clock()
   local junkTo, otherTo = CFG.junkTo or "copper", CFG.otherTo or "iron"
+  local KIND = { copper = { [45] = true, [90] = true }, iron = { [54] = true, [108] = true }, gold = { [81] = true, [162] = true } }
   local cu, fe = {}, {}
   for _, name in ipairs(peripheral.getNames()) do
-    if not skip[name] then
-      if name:find(junkTo, 1, true) then cu[#cu + 1] = name elseif name:find(otherTo, 1, true) then fe[#fe + 1] = name end
+    if not skip[name] and peripheral.hasType(name, "inventory") and not name:find("barrel", 1, true) then
+      local ok, size = pcall(peripheral.call, name, "size")
+      size = ok and size or 0
+      if name:find(junkTo, 1, true) or (KIND[junkTo] or {})[size] then cu[#cu + 1] = name
+      elseif name:find(otherTo, 1, true) or (KIND[otherTo] or {})[size] then fe[#fe + 1] = name end
     end
   end
   chestCount.copper, chestCount.iron = #cu, #fe

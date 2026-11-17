@@ -27,6 +27,10 @@ do
   CFG.skip = {}
   for _, n in ipairs(CFG.inputs) do CFG.skip[n] = true end
   for _, n in ipairs(type(CFG.exclude) == "table" and CFG.exclude or {}) do CFG.skip[n] = true end
+  -- Sophisticated chests are all named "sophisticatedstorage:chest_N" whatever the tier, so the tier is
+  -- told apart by size (single / double): copper 45 / 90, iron 54 / 108, gold 81 / 162
+  CFG.sizeKind = { copper = { [45] = true, [90] = true }, iron = { [54] = true, [108] = true }, gold = { [81] = true, [162] = true } }
+  CFG.sizeOf = {}
   CFG.isJunk = {}
   for _, n in ipairs(type(CFG.junk) == "table" and CFG.junk or {}) do CFG.isJunk[n] = true end
 end
@@ -1068,14 +1072,16 @@ do
   function SM.route(id, order, tried, e)
     local want = CFG.isJunk[id] and CFG.junkTo or CFG.otherTo
     if not want then return end
+    local bySize = CFG.sizeKind[want] or {}
+    local function is(name) return name:find(want, 1, true) or bySize[CFG.sizeOf[name] or 0] end
     if e then
       for _, loc in ipairs(e.locs) do
-        if not tried[loc.inv] and loc.inv:find(want, 1, true) then tried[loc.inv] = true; order[#order + 1] = loc.inv end
+        if not tried[loc.inv] and is(loc.inv) then tried[loc.inv] = true; order[#order + 1] = loc.inv end
       end
       return
     end
     for _, name in ipairs(storages) do
-      if not tried[name] and name:find(want, 1, true) then tried[name] = true; order[#order + 1] = name end
+      if not tried[name] and is(name) then tried[name] = true; order[#order + 1] = name end
     end
   end
   function SM.sortInput()
@@ -1393,6 +1399,7 @@ local function scan()
   -- one chest touched by two modems shows up twice (chest_1 AND chest_7) and everything in it would be
   -- counted double. Same size + exactly the same contents = the same chest: only read it once.
   local sigs = {}
+  for i, name in ipairs(storages) do CFG.sizeOf[name] = sizes[i] end
   for i, name in ipairs(storages) do
     local parts, n, kinds = {}, 0, {}
     for slot, it in pairs(lists[i] or {}) do
