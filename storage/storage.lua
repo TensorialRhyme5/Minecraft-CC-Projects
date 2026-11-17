@@ -1769,7 +1769,7 @@ local function chainCraft(t)
       made, err = autoCraft({ rc = st.rc, out = st.out, crafts = st.crafts, name = name,
         step = "Step " .. i .. "/" .. total .. ": " })
     end
-    if err then return 0, "while making " .. name .. ": " .. err end
+    if err then pickupToStorage(SM.realId(R.id[st.out])); return 0, "while making " .. name .. ": " .. err end
     SM.learnDouble(R.id[st.out], currentPickup())
     pickupToStorage(SM.realId(R.id[st.out]))
   end
@@ -2650,9 +2650,16 @@ local function worker()
         local made, err, parts = chainCraft(t)
         busy = nil
         SM.learnDouble(R.id[t.out], currentPickup())
-        if err then
+        if err and not t.retried and (err:find("couldn't take enough", 1, true) or err:find("ran out of", 1, true)) and made < t.crafts then
+          -- a step came up short (its ingredients are back in storage): plan again from the real counts, once
+          scan()
+          setStatus("Came up short - planning again and retrying " .. t.name .. "...", YELLOW)
+          queue({ kind = "autocraft", rc = t.rc, out = t.out, crafts = t.crafts - made, name = t.name, retried = true, before = made })
+        elseif err then
+          made = made + (t.before or 0)
           setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err, made > 0 and YELLOW or RED)
         else
+          made = made + (t.before or 0)
           setStatus("Crafted " .. commas(made) .. " " .. t.name .. (parts and parts > 0 and (" (made " .. parts .. " part" .. (parts == 1 and "" or "s") .. " first)") or "") .. " - it's in the pickup", LIME)
           if speaker then pcall(speaker.playNote, "chime", 1, 16) end
         end
