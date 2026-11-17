@@ -258,7 +258,10 @@ local function drawItems()
   if UI.q ~= "" then button("clr", W - 1, 2, W, 2, "x", C.bad, C.panel, function() UI.q = ""; UI.page = 1; UI.searchAt = now() end) end
 
   if not netOn then center(6, "No modem!", C.bad); center(7, "Craft this pocket with a", C.dim); center(8, "wireless or ender modem", C.dim)
-  elseif not S.id then center(6, "Looking for storage...", C.dim); center(8, "(storage computer needs", C.dim); center(9, "a wireless modem too)", C.dim)
+  elseif not S.id then
+    center(6, "Looking for storage...", C.dim)
+    center(8, "No answer? Its chunks may", C.dim); center(9, "be unloaded - force-load", C.dim)
+    center(10, "your base with FTB Chunks", C.dim); center(12, "(it also needs an", C.dim); center(13, "ender modem)", C.dim)
   elseif UI.sel then
     local it = UI.sel
     text(2, 4, fit(it.name, W - 2), C.accent)
