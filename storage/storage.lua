@@ -245,6 +245,7 @@ end
 local function isInventory(name)
   if name == CFG.input or isPickupName(name) then return false end
   if name:find("furnace") or name:find("smoker") then return false end     -- furnaces belong to the smelter
+  if name:find("dropper") then return false end                            -- droppers are the trash (over lava)
   if monNames[name] then return false end
   if peripheral.hasType then
     local ok, has = pcall(peripheral.hasType, name, "inventory")
@@ -761,6 +762,103 @@ do
             if fid then pullInto(f.name, 2, fid, 16 - (fu and fu.count or 0)) elseif not fu then SM.noFuel = true end
           end
         end
+  end
+  -- ---------------------------------------------------------- TRASH: droppers over lava + a Redstone Relay
+  -- The items go into the droppers (any number of them, facing down into lava) and the relay pulses
+  -- all its sides, so every dropper touching it throws one item per pulse.
+  function SM.trashParts()
+    local drops, relay = {}, nil
+    for _, n in ipairs(peripheral.getNames()) do
+      if n:find("^minecraft:dropper") then drops[#drops + 1] = n end
+      if peripheral.getType(n) == "redstone_relay" then relay = n end
+    end
+    table.sort(drops)
+    return drops, relay
+  end
+  local SIDES = { "top", "bottom", "left", "right", "front", "back" }
+  local function pulse(relay)
+    for _, sd in ipairs(SIDES) do pcall(peripheral.call, relay, "setOutput", sd, true) end
+    sleep(0.1)
+    for _, sd in ipairs(SIDES) do pcall(peripheral.call, relay, "setOutput", sd, false) end
+    sleep(0.1)
+  end
+  local function inDroppers(drops)
+    local n = 0
+    for _, d in ipairs(drops) do
+      local ok, l = pcall(peripheral.call, d, "list")
+      if ok and type(l) == "table" then for _, it in pairs(l) do n = n + it.count end end
+    end
+    return n
+  end
+  function SM.trash(t, show)
+    local drops, relay = SM.trashParts()
+    if #drops == 0 then setStatus("Couldn't trash: no droppers on the network", RED); return end
+    if not relay then setStatus("Couldn't trash: no Redstone Relay on the network", RED); return end
+    if SM.rescan then SM.rescan() end
+    local e = index[t.id]
+    if not e then setStatus("Couldn't trash: none left in storage", RED); return end
+    local left = math.min(t.n, e.count)
+    local burned = 0
+    while left > 0 do
+      -- load up to a stack into each dropper
+      local loaded = 0
+      for _, d in ipairs(drops) do
+        local room = math.min(64, left - loaded)
+        for _, loc in ipairs(e.locs) do
+          if room <= 0 then break end
+          if loc.count > 0 then
+            local ok, n = pcall(peripheral.call, loc.inv, "pushItems", d, loc.slot, math.min(room, loc.count))
+            if ok and type(n) == "number" and n > 0 then loc.count = loc.count - n; room = room - n; loaded = loaded + n end
+          end
+        end
+        if left - loaded <= 0 then break end
+      end
+      if loaded == 0 then break end
+      -- fire until they're empty (or clearly stuck)
+      local was, still = loaded, loaded
+      local tries = 0
+      repeat
+        for _ = 1, 8 do pulse(relay) end
+        still = inDroppers(drops)
+        if show then show("Trashing " .. nameOf(t.id) .. " - " .. commas(left - (loaded - still)) .. " left") end
+        if still >= was then tries = tries + 1 else tries = 0 end
+        was = still
+      until still == 0 or tries >= 3
+      burned = burned + (loaded - still)
+      left = left - loaded
+      if still > 0 then
+        setStatus("Trash stopped: the droppers aren't emptying (facing down into lava? relay touching them?) - " ..
+          commas(still) .. " still in them", RED)
+        if SM.rescan then SM.rescan() end
+        return
+      end
+      if SM.rescan then SM.rescan() end
+      e = index[t.id]
+      if not e then break end
+    end
+    setStatus("Burned " .. commas(burned) .. " " .. nameOf(t.id), ORANGE)
+  end
+  -- detail page row: TRASH 1 / 16 / 64 / ALL, then tap again to confirm (lava is forever)
+  function SM.trashRow(id, have, y)
+    local drops = SM.trashParts()
+    if #drops == 0 or have <= 0 then return end
+    local c = UI.trash
+    if c and (c.id ~= id or now() - c.at > 5) then UI.trash = nil; c = nil end
+    if c then
+      button("trashyes", RX1, y, RX2 - 4, y, "TAP TO BURN " .. commas(c.n) .. " " .. nameOf(id):upper(), WHITE, RED, function()
+        UI.trash = nil
+        SM.queueTrash({ kind = "trash", id = id, n = c.n })
+      end)
+      button("trashno", RX2 - 2, y, RX2, y, "X", BLACK, LGRAY, function() UI.trash = nil end)
+      return
+    end
+    text(RX1, y, "TRASH", RED, PANEL)
+    local x = RX1 + 7
+    for _, a in ipairs({ { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", have } }) do
+      local n = math.min(a[2], have)
+      button("trash" .. a[1], x, y, x + 6, y, a[1], WHITE, ORANGE, function() UI.trash = { id = id, n = n, at = now() } end)
+      x = x + 8
+    end
   end
   -- EMERGENCY STOP / RESTORE (done by the smelter loop so it never clashes with a tick)
   function SM.request(what, id) SM.req, SM.reqId = what, id; os.queueEvent("smelt_tick") end
@@ -1326,6 +1424,7 @@ end
 local tasks = {}
 local busy = nil              -- progress text while organizing / crafting
 local function queue(t) tasks[#tasks + 1] = t; os.queueEvent("storage_task") end
+SM.queueTrash = queue
 
 local function retrieve(id, want)
   local e = id:find("#", 1, true) and index[id] or byName[id]   -- a plain id means "any copy" (recipes)
@@ -2116,6 +2215,7 @@ local function drawDetail()
     text(RX2 - #n, 11 + i, n, CYAN, PANEL)
   end
   if #invs > 5 then text(RX1 + 1, 17, "+" .. (#invs - 5) .. " more", GRAY, PANEL) end
+  SM.trashRow(id, have, 18)
   -- retrieve
   local _, kind = currentPickup()
   local who = owners()
@@ -2585,6 +2685,9 @@ local function worker()
         busy = nil
         rebuildList()
         setStatus("You can craft " .. commas(n) .. " things right now", LIME)
+      elseif t.kind == "trash" then
+        SM.trash(t, function(m) busy = m end)
+        busy = nil
       elseif t.kind == "retrieve" then
         local n, why = retrieve(t.id, t.n)
         local name = data.names[t.id] or prettyId(t.id)

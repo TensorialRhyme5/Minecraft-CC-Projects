@@ -102,3 +102,9 @@ right-click it so it turns red). They're never used as storage.
 Sophisticated chests and barrels (and their copper / iron / gold / diamond tiers, and limited barrels) are listed per
 wood: "Spruce Chest", "Spruce Iron Chest", "Oak Barrel"... Upgrades keep their wood, so CRAFT on "Spruce Iron Chest"
 only ever uses a spruce chest. The storage reads each chest's wood from its in-game name the first time it sees it.
+
+## Trash (droppers over lava)
+
+Droppers facing down into lava, all touching one CC **Redstone Relay**, each with a wired modem on the storage network.
+On an item's detail page, **TRASH 1 / 16 / 64 / ALL** then **TAP TO BURN** (within 5 s) sends them in; the relay pulses
+until the droppers are empty. Droppers are never used as storage.
