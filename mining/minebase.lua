@@ -71,7 +71,7 @@ local function handle(from, m)
     lastCount = -100; recount()
     local needs = {}
     for _, id in ipairs(CFG.junk) do needs[id] = math.max(0, CFG.keep - (counts[id] or 0)) end
-    reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = fuelCoal ~= nil and fuelCoal < 64 }, m.id)
+    reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = false }, m.id)   -- always split coal 50/50
   elseif m.t == "found" and m.name then
     local line = m.name .. " at " .. m.x .. " " .. m.y .. " " .. m.z .. " (turtle " .. tostring(n) .. ")"
     for _, l in ipairs(found) do if l == line then return end end
@@ -102,11 +102,11 @@ local function draw()
   local busy = {}
   for d, l in pairs(locks) do busy[#busy + 1] = d .. "=" .. l.n end
   print("Chest turns: " .. (#busy > 0 and table.concat(busy, " ") or "free"))
-  print("Fuel chest: " .. (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and "  LOW - turtles keep all coal" or "")) or
+  print("Fuel chest: " .. (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and "  (low)" or "")) or
     ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
-  print("R = recall all   G = go back to work")
+  print("R = recall all  G = back to work  U = update turtles")
 end
 
 local function net()
@@ -123,6 +123,8 @@ local function screen()
       local ev, p = os.pullEvent()
       if ev == "char" and (p == "r" or p == "R") then
         recalled = true; rednet.broadcast({ t = "cmd", cmd = "recall" }, PROTO)
+      elseif ev == "char" and (p == "u" or p == "U") then
+        rednet.broadcast({ t = "cmd", cmd = "reboot" }, PROTO)        -- they restart, grab the newest code and carry on
       elseif ev == "char" and (p == "g" or p == "G") then
         recalled = false; rednet.broadcast({ t = "cmd", cmd = "go" }, PROTO)
       end

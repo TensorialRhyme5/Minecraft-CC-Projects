@@ -292,7 +292,7 @@ local function fuelStop()
     if d and COAL[d.name] then turtle.select(s); turtle.dropDown() end
   end
   for k = 1, 16 do if turtle.getItemCount(k) == 0 then turtle.select(k); break end end
-  local back = FUEL_LOW and 0 or math.floor(c / 2)                    -- your half (none while the chest is low)
+  local back = math.floor(c / 2)                                       -- your half, always
   JOB.carry = 0
   while back > 0 do
     local before = coalCount()
@@ -435,7 +435,10 @@ end
 local function listen()
   while true do
     local _, m = rednet.receive(PROTO)
-    if type(m) == "table" and m.t == "cmd" and (m.n == nil or m.n == info()) then CMD = m.cmd end
+    if type(m) == "table" and m.t == "cmd" and (m.n == nil or m.n == info()) then
+      if m.cmd == "reboot" then os.reboot() end                        -- U on the mine computer: update
+      CMD = m.cmd
+    end
   end
 end
 math.randomseed(os.epoch("utc") + os.getComputerID())
