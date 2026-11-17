@@ -376,7 +376,7 @@ local function setup()
     write("Turtle number (1-4)? ")
     n = tonumber(read())
   until n and n >= 1 and n <= 4 and n == math.floor(n)
-  JOB = { n = n, slice = 1, cell = 0 }
+  if not (JOB and JOB.n == n) then JOB = { n = n, slice = 1, cell = 0 } end   -- re-placed: keep its progress
   os.setComputerLabel("Miner " .. n)
   burnCarried(100000)                                                      -- the starter coal
   if turtle.getFuelLevel() < 300 then
