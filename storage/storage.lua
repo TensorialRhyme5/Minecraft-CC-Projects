@@ -1064,9 +1064,16 @@ do
 
   -- input chest: store / smelt / leave for the question
   -- mine base: junk blocks prefer the copper chests, everything else the iron ones
-  function SM.route(id, order, tried)
+  -- (with e: first the right kind of chest that already holds this item, so stacks stay together)
+  function SM.route(id, order, tried, e)
     local want = CFG.isJunk[id] and CFG.junkTo or CFG.otherTo
     if not want then return end
+    if e then
+      for _, loc in ipairs(e.locs) do
+        if not tried[loc.inv] and loc.inv:find(want, 1, true) then tried[loc.inv] = true; order[#order + 1] = loc.inv end
+      end
+      return
+    end
     for _, name in ipairs(storages) do
       if not tried[name] and name:find(want, 1, true) then tried[name] = true; order[#order + 1] = name end
     end
@@ -1085,8 +1092,9 @@ do
         local left = it.count
         local tried, order = {}, {}
         local e = byName[it.name]
-        if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
+        SM.route(it.name, order, tried, e)
         SM.route(it.name, order, tried)
+        if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
         for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
         for _, target in ipairs(order) do
           if left <= 0 then break end

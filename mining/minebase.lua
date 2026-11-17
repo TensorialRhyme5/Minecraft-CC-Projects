@@ -51,6 +51,42 @@ local function recount()
   counts, fuelCoal = c, fc
 end
 
+-- things in the wrong kind of chest (ores in copper, junk in iron) get moved over, a few stacks at a time
+local chestCount = { copper = 0, iron = 0 }
+local lastFix, moved = -100, 0
+local function resort()
+  if os.clock() - lastFix < 15 then return end
+  lastFix = os.clock()
+  local junkTo, otherTo = CFG.junkTo or "copper", CFG.otherTo or "iron"
+  local cu, fe = {}, {}
+  for _, name in ipairs(peripheral.getNames()) do
+    if not skip[name] then
+      if name:find(junkTo, 1, true) then cu[#cu + 1] = name elseif name:find(otherTo, 1, true) then fe[#fe + 1] = name end
+    end
+  end
+  chestCount.copper, chestCount.iron = #cu, #fe
+  if #cu == 0 or #fe == 0 then return end
+  local budget = 8
+  local function moveOut(from, to, wrong)
+    for _, src in ipairs(from) do
+      local ok, l = pcall(peripheral.call, src, "list")
+      if ok and type(l) == "table" then
+        for slot, it in pairs(l) do
+          if budget <= 0 then return end
+          if wrong(it.name) then
+            for _, dst in ipairs(to) do
+              local ok2, n = pcall(peripheral.call, src, "pushItems", dst, slot)
+              if ok2 and type(n) == "number" and n > 0 then moved = moved + n; budget = budget - 1; break end
+            end
+          end
+        end
+      end
+    end
+  end
+  moveOut(cu, fe, function(id) return not isJunk[id] end)
+  moveOut(fe, cu, function(id) return isJunk[id] end)
+end
+
 local function reply(to, msg, id) msg.re = id; rednet.send(to, msg, PROTO) end
 local function handle(from, m)
   if type(m) ~= "table" then return end
@@ -104,6 +140,10 @@ local function draw()
   print("Chest turns: " .. (#busy > 0 and table.concat(busy, " ") or "free"))
   print("Fuel chest: " .. (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and "  (low)" or "")) or
     ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
+  term.setTextColour(colors.white)
+  print("Chests: " .. chestCount.iron .. " iron (ores), " .. chestCount.copper .. " copper (junk)" ..
+    (moved > 0 and ("  moved " .. moved .. " to the right kind") or ""))
+  if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
   print("R = recall all  G = back to work  U = update turtles")
@@ -117,7 +157,7 @@ local function net()
 end
 local function screen()
   while true do
-    recount(); draw()
+    recount(); pcall(resort); draw()
     local t = os.startTimer(1)
     repeat
       local ev, p = os.pullEvent()
