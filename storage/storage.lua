@@ -89,7 +89,7 @@ local function fit(s, w) if #s > w then return s:sub(1, math.max(1, w - 1)) .. "
 
 -- ---------------------------------------------------------- saved settings (alerts + item names)
 local SAVE = "storage_data.txt"
-local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {} }
+local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {}, dbl = {} }
 if fs.exists(SAVE) then
   local f = fs.open(SAVE, "r")
   local ok, d = pcall(textutils.unserialize, f.readAll())
@@ -100,6 +100,7 @@ if fs.exists(SAVE) then
     data.names = type(d.names) == "table" and d.names or {}
     data.sort = d.sort == "name" and "name" or "count"
     data.smeltRule = type(d.smeltRule) == "table" and d.smeltRule or {}
+    data.dbl = type(d.dbl) == "table" and d.dbl or {}
   end
 end
 local dirty = false
@@ -516,6 +517,25 @@ do
   function SM.info(id) if R.state ~= "ready" then return nil end build(); return SM.inp[id] end
   local function nameOf(id) return data.names[id] or (R.byId[id] and R.name[R.byId[id]]) or prettyId(id) end
   SM.nameOf = nameOf
+  -- "double" versions (id@double) are the same item id with a hidden marker: the turtle crafts the real id
+  function SM.realId(id) return (id or ""):gsub("@double$", "") end
+  -- after crafting a double, remember its marker so the storage files it as the double from now on
+  function SM.learnDouble(pseudo, pk)
+    if not (pseudo and pseudo:find("@double$") and pk) then return end
+    local real = SM.realId(pseudo)
+    local ok, l = pcall(peripheral.call, pk, "list")
+    if not ok or type(l) ~= "table" then return end
+    for _, it in pairs(l) do
+      if it.name == real and it.nbt then
+        local key = real .. "#" .. it.nbt
+        if data.dbl[key] ~= pseudo then
+          data.dbl[key] = pseudo
+          data.names[key] = (R.byId[pseudo] and R.name[R.byId[pseudo]]) or ("Double " .. nameOf(real))
+          dirty = true
+        end
+      end
+    end
+  end
 
   -- what to do with an item that just landed in the input chest: "store", "smelt" or "ask"
   function SM.decide(id, count)
@@ -1031,8 +1051,11 @@ local function scan()
       e.count = e.count + it.count
       local loc = { inv = name, slot = slot, count = it.count, plain = key == it.name }
       e.locs[#e.locs + 1] = loc
-      local b = newByName[it.name]
-      if not b then b = { id = it.name, name = it.name, count = 0, locs = {} }; newByName[it.name] = b end
+      local b = newByName[(it.nbt and data.dbl[it.name .. "#" .. it.nbt]) or it.name]
+      if not b then
+        local bn = (it.nbt and data.dbl[it.name .. "#" .. it.nbt]) or it.name
+        b = { id = bn, name = bn, count = 0, locs = {} }; newByName[bn] = b
+      end
       b.count = b.count + it.count
       b.locs[#b.locs + 1] = loc
     end
@@ -1227,11 +1250,11 @@ local function autoCraft(t)
     local cells = {}
     for cell, it in pairs(assign) do
       local r, c = math.floor((cell - 1) / 3), (cell - 1) % 3
-      cells[r * 4 + c + 1] = R.id[it]
+      cells[r * 4 + c + 1] = SM.realId(R.id[it])
     end
     local nslots = 0
     for _ in pairs(cells) do nslots = nslots + 1 end
-    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = R.id[t.out], slots = nslots, n = t.rc.n }
+    local job = { type = "craft", job = jobCounter, cells = cells, k = k, out = SM.realId(R.id[t.out]), slots = nslots, n = t.rc.n }
     rednet.send(id, job, PROTO)
     local deadline = os.clock() + 20 + k * 0.3
     local reply
@@ -1418,7 +1441,8 @@ local function chainCraft(t)
         step = "Step " .. i .. "/" .. total .. ": " })
     end
     if err then return 0, "while making " .. name .. ": " .. err end
-    pickupToStorage(R.id[st.out])
+    SM.learnDouble(R.id[st.out], currentPickup())
+    pickupToStorage(SM.realId(R.id[st.out]))
   end
   t.step = "Step " .. total .. "/" .. total .. ": "
   local made, err = autoCraft(t)
@@ -2294,6 +2318,7 @@ local function worker()
       elseif t.kind == "autocraft" then
         local made, err, parts = chainCraft(t)
         busy = nil
+        SM.learnDouble(R.id[t.out], currentPickup())
         if err then
           setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err, made > 0 and YELLOW or RED)
         else
@@ -2429,7 +2454,7 @@ print("Enter to clear. Hold Ctrl+T to stop.")
 if _G.__JB_TEST then
   _G.__JB = { hits = function() return hits end, UI = UI, index = function() return index end,
     items = function() return items end, stats = function() return stats end, data = data, status = status,
-    busy = function() return busy end, SM = SM, queue = queue, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
+    busy = function() return busy end, SM = SM, queue = queue, byName = function() return byName end, R = R, pair = function() return PAIR end, sha256 = sha256, R = R, rebuild = function() rebuildList() end, chainPlan = chainPlan, BASEchild = function() return nil end, rankRecipes = rankRecipes, craftPlan = craftPlan }
 end
 
 math.randomseed(os.epoch("utc") + os.getComputerID() * 7919)

@@ -99,7 +99,10 @@ while i < len(tags):
     tlines.append('T\t%s\t%s' % (t, ','.join(map(str, mem))))
 
 def pretty(i):
+    if i.endswith('@double'):
+        return 'Double ' + pretty(i[:-len('@double')])
     n = names.get(i)
+    if n and '%' in n: n = n.replace('%s', '').strip()     # e.g. Sophisticated Storage's "%s%sIron Chest"
     if n and '%' not in n: return n
     return ' '.join(w.capitalize() for w in i.split(':')[1].replace('/', ' ').split('_'))
 ilines = ['I\t%s\t%s' % (i, ascii(pretty(i)).strip() or i) for i in items]

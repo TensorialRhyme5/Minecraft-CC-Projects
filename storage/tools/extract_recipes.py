@@ -29,6 +29,7 @@ RE_TAG = re.compile(r'^data/([^/]+)/tags/items?/(.+)\.json$')
 RE_LANG = re.compile(r'^assets/([^/]+)/lang/en_us\.json$')
 
 recipes = {}      # id -> recipe
+DOUBLES = set()   # items that also have a "double" version (Sophisticated Storage chests)
 tags = {}         # tag -> {'values': [...]}
 names = {}
 mods_loaded = set(EXTRA_MODS)
@@ -172,7 +173,7 @@ def norm_result(r):
 CRAFT_TYPES = {
     'mekanism:mek_data', 'mekanismtools:paxel',
     'sophisticatedcore:upgrade_next_tier', 'sophisticatedstorage:storage_tier_upgrade',
-    'sophisticatedstorage:generic_wood_storage',
+    'sophisticatedstorage:double_chest_tier_upgrade', 'sophisticatedstorage:generic_wood_storage',
     'sophisticatedstorage:shulker_box_from_chest', 'sophisticatedstorageinmotion:moving_storage_from_storage',
     'sophisticatedbackpacks:backpack_upgrade', 'functionalstorage:copy_components', 'actuallyadditions:copy_nbt',
     'immersiveengineering:turn_and_copy', 'fluxnetworks:flux_storage_recipe', 'ars_nouveau:book_upgrade',
@@ -182,8 +183,7 @@ CRAFT_TYPES = {
 
 def parse_recipe(rid, j):
     t = str(j.get('type', ''))
-    if t in CRAFT_TYPES and rid.split(':', 1)[1].startswith('double_'):
-        return None        # Sophisticated "double" chests share the single chest's item id; keep CRAFT making singles
+    double = t in CRAFT_TYPES and rid.startswith('sophisticatedstorage:double_')
     if t in CRAFT_TYPES:
         t = 'minecraft:crafting_shaped' if ('pattern' in j and 'key' in j) else 'minecraft:crafting_shapeless'
     if t in ('minecraft:smelting', 'minecraft:blasting', 'smelting', 'blasting'):
@@ -211,6 +211,8 @@ def parse_recipe(rid, j):
                 if not ing:
                     return None
                 grid[y * 3 + x] = ing
+        if double:   # Sophisticated "double" chests share the single chest's item id: give them their own entry
+            DOUBLES.add(out); out = out + '@double'
         return {'id': rid, 'k': 's', 'out': out, 'n': n, 'g': grid}
     if 'ingredients' in j:
         ings = []
@@ -316,6 +318,8 @@ def main():
             kfiles.append('data/' + os.path.relpath(os.path.join(root, f), os.path.join(KJS, 'data')).replace(os.sep, '/'))
     load_tree(lambda p: open(os.path.join(KJS, p), 'rb').read(), kfiles)
 
+    for x in DOUBLES:
+        names[x + '@double'] = 'Double ' + names.get(x, x.split(':')[-1].replace('_', ' ').title())
     json.dump({'recipes': list(recipes.values()), 'tags': tags, 'names': names,
                'mods': sorted(mods_loaded)}, open(OUT, 'w'))
     print('recipes', len(recipes), 'tags', len(tags), 'names', len(names), stats)
