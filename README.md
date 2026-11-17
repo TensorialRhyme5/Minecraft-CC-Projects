@@ -108,3 +108,23 @@ only ever uses a spruce chest. The storage reads each chest's wood from its in-g
 Droppers facing down into lava, all touching one CC **Redstone Relay**, each with a wired modem on the storage network.
 On an item's detail page, **TRASH 1 / 16 / 64 / ALL** then **TAP TO BURN** (within 5 s) sends them in; the relay pulses
 until the droppers are empty. Droppers are never used as storage.
+
+## Mining turtles (mining dimension)
+
+Four Mining Ender Turtles quarry a 2x2-chunk area (chunks x -5..-4, z -140..-139, so x -80..-49 and z -2240..-2209),
+y 128 down to 65. One chunk per turtle. Every turtle flies at its own height so they don't collide, and they
+take turns at the chests (the mine computer gives out the turns).
+
+- **Mine computer** (Advanced Computer + wireless modem, monitors, chests on wired modems): install
+  `mining/mine_startup.lua` as `startup.lua`. It runs the same storage program as home (titled MINE) plus a
+  "Turtles" tab with each turtle's status. Press **R** there to recall them all and **G** to send them back.
+  On first boot it finds the drop-off chests and the fuel chest (the wooden chest holding only coal).
+- **Turtles:** install `mining/miner_startup.lua` as `startup.lua`, put 16 coal in the turtle, place it on
+  **top of the fuel chest**, reboot, and type its number (1-4). It works out which way it faces by itself.
+- Junk (stone, cobble, deepslate, tuff, granite, diorite, andesite, dirt, gravel, ...) goes to the copper chests,
+  everything else to the iron chests. Storage keeps 1,000 of each junk block; turtles leave extra junk behind.
+- Coal: every coal goes into the fuel chest, the turtle fills itself to 2,000 fuel, and half of what it brought
+  goes to storage on its next trip (all of it stays in the fuel chest while that chest has under 64).
+- Blocks a diamond pickaxe can't break (Allthemodium ore) are skipped and listed in `mine_ores.txt`.
+- Never breaks anything near the base (x -107..-83, z -2257..-2233, y 240+). The space above the drop-off and
+  fuel chests must be open to the sky.

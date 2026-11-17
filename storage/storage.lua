@@ -12,6 +12,24 @@ local CFG = {
   scanEvery  = 10,                     -- seconds between full re-scans
   sortEvery  = 2,                      -- seconds between input-chest checks
 }
+-- a second storage (the mine base) keeps its own settings in storage_config.txt:
+-- { title = "MINE", inputs = { ...drop-off chests... }, exclude = { ...fuel chest... },
+--   junk = { ...ids... }, junkTo = "copper", otherTo = "iron" }
+do
+  if fs.exists("storage_config.txt") then
+    local f = fs.open("storage_config.txt", "r")
+    local ok, c = pcall(textutils.unserialize, f.readAll())
+    f.close()
+    if ok and type(c) == "table" then for k, v in pairs(c) do CFG[k] = v end end
+  end
+  CFG.inputs = type(CFG.inputs) == "table" and CFG.inputs or { CFG.input }
+  CFG.input = CFG.inputs[1] or CFG.input
+  CFG.skip = {}
+  for _, n in ipairs(CFG.inputs) do CFG.skip[n] = true end
+  for _, n in ipairs(type(CFG.exclude) == "table" and CFG.exclude or {}) do CFG.skip[n] = true end
+  CFG.isJunk = {}
+  for _, n in ipairs(type(CFG.junk) == "table" and CFG.junk or {}) do CFG.isJunk[n] = true end
+end
 
 -- ---------------------------------------------------------- monitor
 local mons = {}
@@ -243,7 +261,7 @@ local function currentPickup()
 end
 
 local function isInventory(name)
-  if name == CFG.input or isPickupName(name) then return false end
+  if name == CFG.input or CFG.skip[name] or isPickupName(name) then return false end
   if name:find("furnace") or name:find("smoker") then return false end     -- furnaces belong to the smelter
   if name:find("dropper") then return false end                            -- droppers are the trash (over lava)
   -- machines with an inventory would eat what we "store" in them (a brewing stand burns blaze powder)
@@ -1041,13 +1059,22 @@ do
   end
 
   -- input chest: store / smelt / leave for the question
+  -- mine base: junk blocks prefer the copper chests, everything else the iron ones
+  function SM.route(id, order, tried)
+    local want = CFG.isJunk[id] and CFG.junkTo or CFG.otherTo
+    if not want then return end
+    for _, name in ipairs(storages) do
+      if not tried[name] and name:find(want, 1, true) then tried[name] = true; order[#order + 1] = name end
+    end
+  end
   function SM.sortInput()
-    if not peripheral.isPresent(CFG.input) then return 0, 0 end
-    local ok, l = pcall(peripheral.call, CFG.input, "list")
-    if not ok or type(l) ~= "table" then return 0, 0 end
     local moved, stuck = 0, 0
     SM.asks = {}
     local smeltN = {}
+    for _, INPUT in ipairs(CFG.inputs) do
+    local ok, l = false, nil
+    if peripheral.isPresent(INPUT) then ok, l = pcall(peripheral.call, INPUT, "list") end
+    if not ok or type(l) ~= "table" then l = {} end
     for slot, it in pairs(l) do
       local dec = SM.decide(it.name, it.count)
       if dec ~= "ask" then
@@ -1055,15 +1082,17 @@ do
         local tried, order = {}, {}
         local e = byName[it.name]
         if e then for _, loc in ipairs(e.locs) do if not tried[loc.inv] then tried[loc.inv] = true; order[#order + 1] = loc.inv end end end
+        SM.route(it.name, order, tried)
         for _, name in ipairs(storages) do if not tried[name] then order[#order + 1] = name end end
         for _, target in ipairs(order) do
           if left <= 0 then break end
-          local ok2, n = pcall(peripheral.call, CFG.input, "pushItems", target, slot)
+          local ok2, n = pcall(peripheral.call, INPUT, "pushItems", target, slot)
           if ok2 and type(n) == "number" then left = left - n; moved = moved + n end
         end
         if left > 0 then stuck = stuck + left end
         if dec == "smelt" then smeltN[it.name] = (smeltN[it.name] or 0) + (it.count - left) end
       end
+    end
     end
     for id in pairs(SM.once) do if not SM.asks[id] then SM.once[id] = nil end end
     SM.once = {}
@@ -2030,7 +2059,7 @@ layout()
 
 local function drawHeader()
   fill(1, 1, W, 3, PANEL)
-  text(3, 2, "STORAGE", YELLOW, PANEL)
+  text(3, 2, CFG.title or "STORAGE", YELLOW, PANEL)
   local info = commas(stats.total) .. " items  " .. string.char(7) .. "  " .. stats.types .. " types  " ..
                string.char(7) .. "  " .. (stats.chests or 0) .. " chests"
   text(13, 2, info, LGRAY, PANEL)
@@ -2828,7 +2857,7 @@ end
 term.clear(); term.setCursorPos(1, 1)
 term.setTextColour(colors.yellow); print("STORAGE MANAGER")
 term.setTextColour(colors.white)
-print("Input chest:  " .. CFG.input .. (peripheral.isPresent(CFG.input) and "" or "  (NOT FOUND)"))
+for _, n in ipairs(CFG.inputs) do print("Input chest:  " .. n .. (peripheral.isPresent(n) and "" or "  (NOT FOUND)")) end
 local pk, pkind = currentPickup()
 print("Pickup:       " .. (pk and (pk .. " (" .. pkind:lower() .. ")") or "NOT FOUND - place a barrel or backpack"))
 term.setTextColour(colors.lightGray)
