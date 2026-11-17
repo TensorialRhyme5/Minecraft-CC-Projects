@@ -32,6 +32,14 @@ do
   CFG.sizeKind = { copper = { [45] = true, [90] = true }, iron = { [54] = true, [108] = true }, gold = { [81] = true, [162] = true } }
   CFG.sizeOf = {}
   CFG.isJunk = {}
+  if CFG.title == "MINE" then                       -- every layer of the mining dimension counts as junk
+    CFG.junk = type(CFG.junk) == "table" and CFG.junk or {}
+    for _, id in ipairs({ "minecraft:stone", "minecraft:cobblestone", "minecraft:deepslate", "minecraft:cobbled_deepslate", "minecraft:dirt", "minecraft:netherrack", "minecraft:end_stone" }) do
+      local have = false
+      for _, j in ipairs(CFG.junk) do if j == id then have = true end end
+      if not have then CFG.junk[#CFG.junk + 1] = id end
+    end
+  end
   for _, n in ipairs(type(CFG.junk) == "table" and CFG.junk or {}) do CFG.isJunk[n] = true end
 end
 

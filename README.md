@@ -112,7 +112,7 @@ until the droppers are empty. Droppers are never used as storage.
 ## Mining turtles (mining dimension)
 
 Four Mining Ender Turtles quarry the 2x2 chunks just south of the mine base (chunks x -6..-5, z -140..-139, so x -96..-65 and z -2240..-2209),
-y 128 down to 65. One chunk per turtle. Every turtle flies at its own height so they don't collide, and they
+from the grass (y 252) all the way down to just above bedrock (y -63): first the deepslate band (128-65), then grass/dirt/stone (252-129), then netherrack and end stone (64 to -63). One chunk per turtle. Every turtle flies at its own height so they don't collide, and they
 take turns at the chests (the mine computer gives out the turns).
 
 - **Mine computer** (Advanced Computer + wireless modem, monitors, chests on wired modems): install

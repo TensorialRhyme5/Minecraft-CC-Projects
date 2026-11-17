@@ -12,15 +12,17 @@ local CONF = {
   fuelChest = { x = -95, y = 253, z = -2245 },                        -- the chest blocks themselves;
   drops = { { x = -91, y = 253, z = -2247 }, { x = -91, y = 253, z = -2249 } },  -- turtles sit on top
   quarry = { x = -96, z = -2240 },          -- north-west corner of the 2x2 chunks south of the base (chunks -6..-5, -140..-139)
-  top = 128, bottom = 65,                   -- phase 1: the best ore band
+  -- the mining dimension is flat layers: grass 252, dirt 248-251, stone 129-247, deepslate 65-128,
+  -- netherrack 1-64, end stone -63..0, bedrock -64. Each band is mined top-down, one after the other.
+  bands = { { top = 128, bottom = 65 }, { top = 252, bottom = 129 }, { top = 64, bottom = -63 } },
   laneUp = 6,                               -- turtle n travels at (chest top + laneUp + n)
   protect = { x1 = -96, x2 = -81, z1 = -2256, z2 = -2241, y1 = 240 },   -- the base chunk: never break blocks here
-  fuelTarget = 2000,                        -- fill up to this at the fuel chest
+  fuelTarget = 3000,                        -- fill up to this at the fuel chest (the bottom is a long way down)
   junk = {
     "minecraft:stone", "minecraft:cobblestone", "minecraft:deepslate", "minecraft:cobbled_deepslate",
     "minecraft:tuff", "minecraft:granite", "minecraft:diorite", "minecraft:andesite", "minecraft:calcite",
     "minecraft:dirt", "minecraft:gravel", "minecraft:sand", "minecraft:netherrack", "minecraft:blackstone",
-    "minecraft:basalt", "minecraft:smooth_basalt", "minecraft:dripstone_block",
+    "minecraft:basalt", "minecraft:smooth_basalt", "minecraft:dripstone_block", "minecraft:end_stone",
   },
 }
 local PROTO = "minenet"
@@ -80,7 +82,9 @@ local function ask(msg, timeout)
     if type(r) == "table" and r.re == msg.id then return r end
   end
 end
+local HARD = false                             -- did the last trip run into a block we can't break?
 local function note(name)
+  HARD = true
   local k = P.x .. "," .. P.y .. "," .. P.z
   if noted[k] then return end
   noted[k] = true
@@ -168,6 +172,7 @@ local function horiz(axis, t, noDig)
 end
 local function goTo(x, y, z, yFirst, noDig)
   local why
+  HARD = false
   for _ = 1, 4 do
     local ok = true
     if yFirst then ok, why = vert(y, noDig) end
@@ -177,7 +182,7 @@ local function goTo(x, y, z, yFirst, noDig)
     if P.x == x and P.y == y and P.z == z then return true end
     if not ok and why ~= "unbreakable" then return false, why end
   end
-  return false, why
+  return false, HARD and "unbreakable" or why
 end
 
 -- ---------------------------------------------------------- where things are
@@ -188,12 +193,16 @@ local function corner(n)
 end
 local Q
 local function inQ(x, z) return Q and x >= Q.x and x <= Q.x + 15 and z >= Q.z and z <= Q.z + 15 end
-local SL = {}                                  -- slice heights: each one clears y-1, y, y+1
-do
-  local y = CONF.top - 1
-  while y - 1 >= CONF.bottom do SL[#SL + 1] = y; y = y - 3 end
-  if SL[#SL] - 1 > CONF.bottom then SL[#SL + 1] = CONF.bottom + 1 end
+local function slicesOf(b)                     -- slice heights: each one clears y-1, y, y+1
+  local list, y = {}, b.top - 1
+  while y - 1 >= b.bottom do list[#list + 1] = y; y = y - 3 end
+  if list[#list] - 1 > b.bottom then list[#list + 1] = b.bottom + 1 end
+  return list
 end
+local B = CONF.bands[1]                        -- the band being mined now
+local SL = slicesOf(B)
+local ALLSL = 0
+for _, b in ipairs(CONF.bands) do ALLSL = ALLSL + #slicesOf(b) end
 local function cellXZ(k)                       -- back-and-forth rows over the chunk
   local r, c = math.floor(k / 16), k % 16
   if r % 2 == 1 then c = 15 - c end
@@ -291,6 +300,15 @@ local function fuelStop()
     for k = 1, 16 do if turtle.getItemCount(k) == 0 then turtle.select(k); break end end
     if not turtle.suckDown(math.min(64, needItems)) then break end
     burnCarried(CONF.fuelTarget)
+  end
+  -- fuel chest empty and we can't make it out and back: sit right here until coal shows up
+  local need = costHome() + 2 * (lane() - CONF.bands[#CONF.bands].bottom) + 300
+  while turtle.getFuelLevel() < need do
+    ping("waiting for coal in the fuel chest", true)
+    ask({ t = "lock", dock = "fuel" })                                -- keep our turn while we wait
+    sleep(20)
+    for k = 1, 16 do if turtle.getItemCount(k) == 0 then turtle.select(k); break end end
+    if turtle.suckDown(64) then burnCarried(CONF.fuelTarget) end
   end
   for s = 1, 16 do                                                     -- anything not burned goes back
     local d = turtle.getItemDetail(s)
@@ -399,7 +417,7 @@ local function reach(k, y)
   return goTo(x, y, z)
 end
 local function clearUpDown(y)
-  if y + 1 <= CONF.top then
+  if y + 1 <= B.top then
     for _ = 1, 20 do                                                       -- gravel/sand keep falling
       if not turtle.detectUp() then break end
       local ok, d = turtle.inspectUp()
@@ -407,20 +425,30 @@ local function clearUpDown(y)
       if not turtle.digUp() then note(d.name); break end
     end
   end
-  if y - 1 >= CONF.bottom and turtle.detectDown() then
+  if y - 1 >= B.bottom and turtle.detectDown() then
     local ok, d = turtle.inspectDown()
     if not (ok and d.name:find("turtle", 1, true)) and not turtle.digDown() then note(d.name) end
   end
 end
 local function mine()
   Q = corner(JOB.n)
+  JOB.band = JOB.band or 1
+  while JOB.band <= #CONF.bands do
+  B = CONF.bands[JOB.band]; SL = slicesOf(B)
+  local before = 0
+  for i = 1, JOB.band - 1 do before = before + #slicesOf(CONF.bands[i]) end
   while JOB.slice <= #SL do
     if CMD == "recall" then dockRun("recalled"); park() end
     local y = SL[JOB.slice]
     if turtle.getFuelLevel() < costHome() then burnCarried(costHome() + 600) end
     if turtle.getFuelLevel() < costHome() then dockRun("low on fuel") end
-    if not reach(JOB.cell, y) or not inQ(P.x, P.z) or P.y ~= y then
-      ping("can't get to my chunk - something is in the way (above the chests?)", true)
+    local okR, whyR = reach(JOB.cell, y)
+    if not okR and whyR == "unbreakable" and inQ(P.x, P.z) then
+      JOB.cell = JOB.cell + 1                                        -- that spot is a block we can't break: skip it
+      if JOB.cell > 255 then JOB.cell = 0; JOB.slice = JOB.slice + 1 end
+      saveJob()
+    elseif not okR or not inQ(P.x, P.z) or P.y ~= y then
+      ping("can't get to my chunk (" .. tostring(whyR or "?") .. ") - is something in the way?", true)
       sleep(15)
     else
     clearUpDown(y)
@@ -429,8 +457,11 @@ local function mine()
     JOB.cell = JOB.cell + 1
     if JOB.cell > 255 then JOB.cell = 0; JOB.slice = JOB.slice + 1 end
     saveJob()
-    ping("mining " .. math.floor(((JOB.slice - 1) * 256 + JOB.cell) * 100 / (#SL * 256)) .. "%")
+    ping("mining " .. math.floor(((before + JOB.slice - 1) * 256 + JOB.cell) * 100 / (ALLSL * 256)) .. "% (y " .. y .. ")")
     end
+  end
+  JOB.band, JOB.slice, JOB.cell = JOB.band + 1, 1, 0                -- next band down / up
+  saveJob()
   end
   dockRun("finished")
   park("DONE - this chunk is mined out")
@@ -449,7 +480,7 @@ end
 math.randomseed(os.epoch("utc") + os.getComputerID())
 if not JOB or not P then setup() end
 Q = corner(JOB.n)
-print("Miner " .. JOB.n .. ": chunk at " .. Q.x .. " " .. Q.z .. ", " .. #SL .. " layers of 3 from y " .. CONF.top .. " to " .. CONF.bottom)
+print("Miner " .. JOB.n .. ": chunk at " .. Q.x .. " " .. Q.z .. ", " .. ALLSL .. " layers of 3, grass (252) to just above bedrock")
 print("Hold Ctrl+T to stop.")
 updateNeeds()
 if modem then parallel.waitForAny(mine, listen) else mine() end

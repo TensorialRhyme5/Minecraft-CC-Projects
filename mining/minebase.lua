@@ -18,6 +18,11 @@ if not rednet.isOpen() then print("No wireless/ender modem on this computer - th
 
 local turtles, locks = {}, {}
 local counts, fuelCoal, lastCount = {}, nil, -100
+for _, id in ipairs({ "minecraft:stone", "minecraft:cobblestone", "minecraft:deepslate", "minecraft:cobbled_deepslate", "minecraft:dirt", "minecraft:netherrack", "minecraft:end_stone" }) do        -- every layer of the mining dimension
+  local have = false
+  for _, j in ipairs(CFG.junk) do if j == id then have = true end end
+  if not have then CFG.junk[#CFG.junk + 1] = id end
+end
 local isJunk, skip = {}, {}
 for _, id in ipairs(CFG.junk) do isJunk[id] = true end
 for _, n in ipairs(CFG.inputs) do skip[n] = true end
