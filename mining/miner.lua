@@ -46,7 +46,7 @@ end
 local JOB = readT(JOBFILE)                     -- which turtle we are and how far along
 local CMD = nil                                -- "recall" from the mine computer
 local JUNK, ALLOW, FUEL_LOW = {}, {}, false
-for _, id in ipairs(CONF.junk) do JUNK[id] = true; ALLOW[id] = 64 end
+for _, id in ipairs(CONF.junk) do JUNK[id] = true; ALLOW[id] = 1e9 end   -- (no junk cap: keep everything)
 local noted = {}
 
 local function savePos() writeT(POSFILE, P) end
@@ -92,6 +92,8 @@ local function note(name)
 end
 
 -- ---------------------------------------------------------- moving (every step is saved)
+local Q                                        -- our chunk's north-west corner (set once we know our number)
+local function inQ(x, z) return Q and x >= Q.x and x <= Q.x + 15 and z >= Q.z and z <= Q.z + 15 end
 local function protected(x, y, z)
   local b = CONF.protect
   return x >= b.x1 and x <= b.x2 and z >= b.z1 and z <= b.z2 and y >= b.y1
@@ -149,7 +151,14 @@ local function vert(ty, noDig)
       if why ~= "unbreakable" then return false, why end
       note(what)
       local moved = false                                            -- hard block: step around it
-      for k = 0, 3 do face((P.f + k) % 4); if step("fwd", noDig) then moved = true; break end end
+      local inside = inQ(P.x, P.z)
+      for k = 0, 3 do
+        local f = (P.f + k) % 4
+        local nx, nz = P.x + DX[f + 1], P.z + DZ[f + 1]
+        if (not inside or inQ(nx, nz)) and not protected(nx, P.y, nz) then   -- never step out of our chunk
+          face(f); if step("fwd", noDig) then moved = true; break end
+        end
+      end
       if not moved then return false, why end
     end
   end
@@ -191,8 +200,6 @@ local function lane() return DOCKY + CONF.laneUp + (JOB and JOB.n or 1) end
 local function corner(n)
   return { x = CONF.quarry.x + ((n - 1) % 2) * 16, z = CONF.quarry.z + math.floor((n - 1) / 2) * 16 }
 end
-local Q
-local function inQ(x, z) return Q and x >= Q.x and x <= Q.x + 15 and z >= Q.z and z <= Q.z + 15 end
 local function slicesOf(b)                     -- slice heights: each one clears y-1, y, y+1
   local list, y = {}, b.top - 1
   while y - 1 >= b.bottom do list[#list + 1] = y; y = y - 3 end

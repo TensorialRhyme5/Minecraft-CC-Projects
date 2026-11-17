@@ -115,7 +115,7 @@ local function handle(from, m)
   elseif m.t == "needs" then
     lastCount = -100; recount()
     local needs = {}
-    for _, id in ipairs(CFG.junk) do needs[id] = math.max(0, CFG.keep - (counts[id] or 0)) end
+    for _, id in ipairs(CFG.junk) do needs[id] = 1e9 end              -- no cap: bring all of it home
     reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = false }, m.id)   -- always split coal 50/50
   elseif m.t == "found" and m.name then
     local line = m.name .. " at " .. m.x .. " " .. m.y .. " " .. m.z .. " (turtle " .. tostring(n) .. ")"
