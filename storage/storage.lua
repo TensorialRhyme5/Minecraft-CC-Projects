@@ -1330,11 +1330,22 @@ local function queryWords(q)
 end
 local FUZZY_BELOW = 10        -- look for close matches when the normal search finds fewer than this
 
+-- mod filter: the MOD button (UI.mod = "create") and/or "@crea" typed in the search
+function R.modOf(id) return (tostring(id):match("^([^:]+):")) or "" end
+function R.modFilter(q)
+  local at = q:match("@(%S*)")
+  if at then q = q:gsub("@%S*", ""):gsub("^%s+", ""):gsub("%s+$", "") end
+  local want = UI.mod
+  return q, function(id)
+    local ns = R.modOf(id)
+    return (not want or ns == want) and (not at or at == "" or ns:sub(1, #at) == at)
+  end
+end
 local function rebuildList(quick)
   items = {}
   UI.fuzzy, UI.didYouMean = false, nil
   UI.fuzzyAt = nil
-  local q = UI.search:lower()
+  local q, modOk = R.modFilter(UI.search:lower())
   local qs = q:gsub("%s+", "")                     -- "pokeball" also finds "Poke Ball"
   local wantFuzzy = #q >= 3 and not quick
   if UI.mode == "recipes" then
@@ -1342,7 +1353,7 @@ local function rebuildList(quick)
     local only = UI.canMake and R.canSet
     for j, o in ipairs(R.outs) do
       if (q == "" or R.lower[j]:find(q, 1, true) or (#qs >= 3 and R.lns[j]:find(qs, 1, true)))
-         and (not UI.canMake or (only and only[o])) then
+         and (not UI.canMake or (only and only[o])) and modOk(R.id[o]) then
         local nm = R.name[o]
         local l = nm:lower():gsub(" %(.*%)$", "")
         local ls = R.lns[j]
@@ -1356,7 +1367,7 @@ local function rebuildList(quick)
       local have = {}
       for _, it in ipairs(items) do have[it.ri] = true end
       for j, o in ipairs(R.outs) do
-        if not have[o] and (not UI.canMake or (only and only[o])) then
+        if not have[o] and (not UI.canMake or (only and only[o])) and modOk(R.id[o]) then
           local sc = fuzzyScore(qw, R.lname[j])
           if sc then
             items[#items + 1] = { ri = o, name = R.name[o], rank = 3 + sc, len = #(R.lname[j]:gsub(" %(.*%)$", "")) }
@@ -1379,8 +1390,8 @@ local function rebuildList(quick)
   end
   for id, it in pairs(index) do
     local name = data.names[id] or prettyId(id)
-    if q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true)
-       or (#qs >= 3 and name:lower():gsub("%s+", ""):find(qs, 1, true)) then
+    if modOk(id) and (q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true)
+       or (#qs >= 3 and name:lower():gsub("%s+", ""):find(qs, 1, true))) then
       items[#items + 1] = { id = id, name = name, count = it.count }
     end
   end
@@ -1391,7 +1402,7 @@ local function rebuildList(quick)
     for _, it in ipairs(items) do have[it.id] = true end
     local close = {}
     for id, it in pairs(index) do
-      if not have[id] then
+      if not have[id] and modOk(id) then
         local name = data.names[id] or prettyId(id)
         local sc = fuzzyScore(qw, name:lower())
         if sc then close[#close + 1] = { id = id, name = name, count = it.count, sc = sc } end
@@ -2180,6 +2191,7 @@ local function drawSearchBar()
   local qry = UI.mode == "quarry"
   local q = UI.search == "" and (rec and "search recipes" or qry and "search the quarry" or "tap letters or type to search") or UI.search
   text(LX1 + 1, 5, qry and "Quarry:" or "Search:", qry and ORANGE or YELLOW, PANEL)
+  if UI.mod then q = "[" .. R.modName(UI.mod) .. "] " .. (UI.search == "" and "" or UI.search) end
   local qtxt = fit(q, LX2 - LX1 - 71) .. (UI.search ~= "" and "_" or "")
   if CFG.title ~= "MINE" then
     button("quarry", LX2 - 60, 5, LX2 - 50, 5, qry and "ITEMS" or "QUARRY", BLACK, qry and CYAN or ORANGE, function()
@@ -2343,7 +2355,10 @@ local function drawKeyboard(y0)
   button("space", RX1, y, RX1 + 14, y + 2, "SPACE", WHITE, GRAY, function() UI.search = UI.search .. " "; rebuildList(true) end)
   button("del", RX1 + 16, y, RX1 + 26, y + 2, "DEL", WHITE, GRAY, function() UI.search = UI.search:sub(1, -2); UI.page = 1; rebuildList(true) end)
   button("clr", RX1 + 28, y, RX2, y + 2, "CLEAR", BLACK, RED, function() UI.search = ""; UI.page = 1; rebuildList() end)
-  return y + 4
+  y = y + 3
+  button("modpick", RX1, y, RX2, y, "MOD: " .. (UI.mod and R.modName(UI.mod) or "all mods") .. "  " .. string.char(16),
+    UI.mod and BLACK or WHITE, UI.mod and ORANGE or GRAY, function() UI.panel = "mods"; UI.modPage = 1 end)
+  return y + 2
 end
 
 local function drawAlerts(y0)
@@ -2714,7 +2729,9 @@ do
   local function perPage() return (H - 4 - 7 + 1) * 2 end
   function QY.search()
     QY.q, QY.at = UI.search, now()
-    send({ type = "search", q = UI.search, off = (QY.page - 1) * perPage(), lim = perPage() })
+    local q = UI.search .. (UI.mod and (" @" .. UI.mod) or "")
+    QY.sentQ = q
+    send({ type = "search", q = q, off = (QY.page - 1) * perPage(), lim = perPage() })
   end
   local function pair()
     if #QY.code ~= 8 then return end
@@ -2738,7 +2755,7 @@ do
       end
     else
       QY.id = from
-      if m.type == "results" and m.q == QY.q and (m.off or 0) == (QY.page - 1) * perPage() then
+      if m.type == "results" and m.q == QY.sentQ and (m.off or 0) == (QY.page - 1) * perPage() then
         QY.results, QY.found, QY.got = m.items or {}, m.found or 0, true
       end
       if m.type == "results" or m.type == "info" then QY.info = m end
@@ -2753,8 +2770,9 @@ do
       for _, x in ipairs(ids) do if x == QY.sid then QY.id = x end end
       QY.id = QY.id or ids[1]
     end
-    if UI.search ~= QY.seen then QY.seen, QY.changedAt, QY.page, QY.sel = UI.search, now(), 1, nil end
-    if QY.key and QY.id and ((QY.q ~= UI.search and now() - QY.changedAt > 0.4) or now() - QY.at > 5) then QY.search() end
+    local seen = UI.search .. "|" .. tostring(UI.mod)
+    if seen ~= QY.seen then QY.seen, QY.changedAt, QY.page, QY.sel, QY.q = seen, now(), 1, nil, nil end
+    if QY.key and QY.id and ((QY.q == nil and now() - QY.changedAt > 0.4) or now() - QY.at > 5) then QY.search() end
   end
   function QY.loop()
     if CFG.title == "MINE" then while true do sleep(3600) end end
@@ -2849,6 +2867,50 @@ do
   end
 end
 
+-- MOD picker: every mod you have items (or recipes) from, biggest first
+function R.modName(ns)
+  local nice = { minecraft = "Minecraft", create = "Create", mekanism = "Mekanism", ae2 = "AE2", allthemodium = "Allthemodium",
+    sophisticatedstorage = "Soph. Storage", sophisticatedbackpacks = "Soph. Backpacks", cobblemon = "Cobblemon",
+    immersiveengineering = "Immersive Eng.", industrialforegoing = "Industrial Foregoing", mysticalagriculture = "Mystical Agri" }
+  if nice[ns] then return nice[ns] end
+  return (ns:gsub("_", " "):gsub("^%l", string.upper))
+end
+function R.drawMods()
+  text(RX1, 6, "FILTER BY MOD", YELLOW)
+  local counts, list = {}, {}
+  if UI.mode == "recipes" and R.state == "ready" then
+    for _, o in ipairs(R.outs) do local ns = R.modOf(R.id[o]); counts[ns] = (counts[ns] or 0) + 1 end
+  else
+    for id, it in pairs(index) do local ns = R.modOf(id); counts[ns] = (counts[ns] or 0) + 1 end
+  end
+  for ns, c in pairs(counts) do list[#list + 1] = { ns = ns, c = c } end
+  table.sort(list, function(a, b) if a.c ~= b.c then return a.c > b.c end return a.ns < b.ns end)
+  local rows = H - 12
+  local per = rows * 2
+  local pages = math.max(1, math.ceil(#list / per))
+  UI.modPage = math.min(math.max(1, UI.modPage or 1), pages)
+  local colW = math.floor((RX2 - RX1) / 2)
+  button("modall", RX1, 8, RX2, 8, "ALL MODS", BLACK, UI.mod and GRAY or LIME, function() UI.mod = nil; UI.panel = nil; UI.page = 1; rebuildList() end)
+  for i = 1, per do
+    local m = list[(UI.modPage - 1) * per + i]
+    if not m then break end
+    local col, r = (i <= rows) and 0 or 1, (i - 1) % rows
+    local x, y = RX1 + col * (colW + 1), 10 + r
+    local on = UI.mod == m.ns
+    local bg = on and HILITE or ((r % 2 == 0) and PANEL or BLACK)
+    fill(x, y, x + colW - 1, y, bg)
+    local cnt = commas(m.c)
+    text(x, y, fit(R.modName(m.ns), colW - #cnt - 1), on and YELLOW or WHITE, bg)
+    text(x + colW - #cnt, y, cnt, CYAN, bg)
+    hit("mod:" .. m.ns, x, y, x + colW - 1, y, function() UI.mod = m.ns; UI.panel = nil; UI.page = 1; rebuildList() end)
+  end
+  local by = H - 1
+  button("modprev", RX1, by, RX1 + 8, by, string.char(17), YELLOW, UI.modPage > 1 and GRAY or PANEL, function() UI.modPage = UI.modPage - 1 end)
+  text(RX1 + 10, by, UI.modPage .. "/" .. pages, LGRAY)
+  button("modnext", RX1 + 16, by, RX1 + 24, by, string.char(16), YELLOW, UI.modPage < pages and GRAY or PANEL, function() UI.modPage = UI.modPage + 1 end)
+  button("modback", RX1 + 27, by, RX2, by, "BACK", BLACK, YELLOW, function() UI.panel = nil end)
+end
+
 local function draw()
   clear(); hits = {}
   layout()
@@ -2856,7 +2918,8 @@ local function draw()
   drawSearchBar()
   if UI.mode == "quarry" then SM.QY.drawList() else drawList() end
   for y = 5, H do setCell(RX1 - 2, y, "\149", YELLOW, BLACK) end
-  if UI.mode == "quarry" then SM.QY.drawPanel()
+  if UI.panel == "mods" then R.drawMods()
+  elseif UI.mode == "quarry" then SM.QY.drawPanel()
   elseif UI.mode == "recipes" and UI.rsel then drawRecipe()
   elseif UI.mode == "items" and UI.selected then drawDetail()
   else
@@ -2899,11 +2962,14 @@ end
 -- ---------------------------------------------------------- pocket remote server
 local NET_PROTO = CFG.title == "MINE" and "minestore" or "storagenet"   -- the mine has its own channel
 local function searchFor(q, offset, limit)
-  q = (q or ""):lower()
+  local saved = UI.mod; UI.mod = nil                     -- (a pocket's search ignores the monitor's MOD button)
+  local modOk
+  q, modOk = R.modFilter((q or ""):lower())
+  UI.mod = saved
   local out = {}
   for id, e in pairs(index) do
     local name = data.names[id] or prettyId(e.name or id)
-    if q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true) then
+    if modOk(id) and (q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true)) then
       out[#out + 1] = { id = id, name = name, count = e.count }
     end
   end
@@ -2912,7 +2978,7 @@ local function searchFor(q, offset, limit)
     local have = {}
     for _, it in ipairs(out) do have[it.id] = true end
     for id, e in pairs(index) do
-      if not have[id] then
+      if not have[id] and modOk(id) then
         local name = data.names[id] or prettyId(e.name or id)
         if fuzzyScore(qw, name:lower()) then out[#out + 1] = { id = id, name = name, count = e.count, close = true } end
       end
