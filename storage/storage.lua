@@ -246,6 +246,10 @@ local function isInventory(name)
   if name == CFG.input or isPickupName(name) then return false end
   if name:find("furnace") or name:find("smoker") then return false end     -- furnaces belong to the smelter
   if name:find("dropper") then return false end                            -- droppers are the trash (over lava)
+  -- machines with an inventory would eat what we "store" in them (a brewing stand burns blaze powder)
+  for _, w in ipairs({ "brewing", "hopper", "dispenser", "minecraft:crafter", "composter", "beacon", "lectern", "campfire", "jukebox", "bookshelf", "decorated_pot" }) do
+    if name:find(w, 1, true) then return false end
+  end
   if monNames[name] then return false end
   if peripheral.hasType then
     local ok, has = pcall(peripheral.hasType, name, "inventory")
@@ -263,6 +267,13 @@ local function findStorages()
     if isInventory(name) then storages[#storages + 1] = name end
   end
   table.sort(storages)
+  for _, name in ipairs(storages) do                     -- show anything odd we're storing into, so it can be spotted
+    local plain = false
+    for _, w in ipairs({ "chest", "barrel", "drawer", "crate", "shulker", "storage", "backpack", "vault", "cabinet" }) do
+      if name:find(w, 1, true) then plain = true; break end
+    end
+    if not plain then print("Using as storage: " .. name) end
+  end
 end
 
 -- ---------------------------------------------------------- recipe book
@@ -783,7 +794,8 @@ do
     local where = {}
     if e then for _, l in ipairs(e.locs) do where[#where + 1] = l.inv:gsub("^.*:", "") .. "#" .. l.slot .. "=" .. l.count; if #where >= 3 then break end end end
     return "couldn't take enough " .. nameOf(id) .. " out of storage (needed " .. tostring(want) .. ", got " .. tostring(got) ..
-      ", storage thinks it has " .. (e and e.count or 0) .. (#where > 0 and (" in " .. table.concat(where, " ")) or "") .. ")"
+      ", storage thinks it has " .. (e and e.count or 0) .. (#where > 0 and (" in " .. table.concat(where, " ")) or "") .. ")" ..
+      (SM.tried and #SM.tried > 0 and (" [" .. table.concat(SM.tried, "; ", 1, math.min(3, #SM.tried)) .. "]") or "")
   end
   -- ---------------------------------------------------------- TRASH: droppers over lava + a Redstone Relay
   -- The items go into the droppers (any number of them, facing down into lava) and the relay pulses
@@ -1449,6 +1461,7 @@ local function queue(t) tasks[#tasks + 1] = t; os.queueEvent("storage_task") end
 SM.queueTrash = queue
 
 local function retrieve(id, want)
+  if #SM.tried > 20 then SM.tried = {} end
   local e = id:find("#", 1, true) and index[id] or byName[id]   -- a plain id means "any copy" (recipes)
   if not e then return 0 end
   local target = currentPickup()
@@ -1457,7 +1470,10 @@ local function retrieve(id, want)
   for _, l in ipairs(e.locs) do
     if moved >= want then break end
     local ok, n = pcall(peripheral.call, l.inv, "pushItems", target, l.slot, math.min(want - moved, l.count))
-    if ok and type(n) == "number" then moved = moved + n end    -- (0 can just mean this spot is out of date: keep going)
+    if ok and type(n) == "number" then moved = moved + n end
+    if not ok or n ~= math.min(want - moved + (tonumber(n) or 0), l.count) then
+      SM.tried[#SM.tried + 1] = l.inv .. " slot " .. l.slot .. " gave " .. tostring(ok and n or "error") .. " of " .. l.count
+    end    -- (0 can just mean this spot is out of date: keep going)
   end
   return moved
 end
@@ -1567,6 +1583,7 @@ local function autoCraft(t)
     if k == 0 then return made, made > 0 and "ran out of ingredients" or "missing ingredients" end
     busy = (t.step or "") .. "Crafting " .. t.name .. "  " .. (t.crafts - remaining) .. "/" .. t.crafts
     local need = {}
+    SM.tried = {}
     for it, n in pairs(used) do
       local got = retrieve(R.id[it], n)
       need[SM.realId(R.id[it])] = (need[SM.realId(R.id[it])] or 0) + n
