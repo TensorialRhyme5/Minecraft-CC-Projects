@@ -172,7 +172,7 @@ def norm_result(r):
 CRAFT_TYPES = {
     'mekanism:mek_data', 'mekanismtools:paxel',
     'sophisticatedcore:upgrade_next_tier', 'sophisticatedstorage:storage_tier_upgrade',
-    'sophisticatedstorage:double_chest_tier_upgrade', 'sophisticatedstorage:generic_wood_storage',
+    'sophisticatedstorage:generic_wood_storage',
     'sophisticatedstorage:shulker_box_from_chest', 'sophisticatedstorageinmotion:moving_storage_from_storage',
     'sophisticatedbackpacks:backpack_upgrade', 'functionalstorage:copy_components', 'actuallyadditions:copy_nbt',
     'immersiveengineering:turn_and_copy', 'fluxnetworks:flux_storage_recipe', 'ars_nouveau:book_upgrade',
@@ -182,6 +182,8 @@ CRAFT_TYPES = {
 
 def parse_recipe(rid, j):
     t = str(j.get('type', ''))
+    if t in CRAFT_TYPES and rid.split(':', 1)[1].startswith('double_'):
+        return None        # Sophisticated "double" chests share the single chest's item id; keep CRAFT making singles
     if t in CRAFT_TYPES:
         t = 'minecraft:crafting_shaped' if ('pattern' in j and 'key' in j) else 'minecraft:crafting_shapeless'
     if t in ('minecraft:smelting', 'minecraft:blasting', 'smelting', 'blasting'):
