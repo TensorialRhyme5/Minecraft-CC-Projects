@@ -134,7 +134,7 @@ local status = { msg = "Scanning storage...", col = LGRAY, at = 0 }
 -- crafting / smelting results also go on this computer's own screen and into craft_log.txt (last 40),
 -- so a message that flashed past on the monitor can still be read afterwards
 local function logResult(msg)
-  if not (msg:find("^Crafted") or msg:find("^Made ") or msg:find("^Couldn't") or msg:find("^Smelted")) then return end
+  if not (msg:find("^Crafted") or msg:find("^Made ") or msg:find("^Couldn't") or msg:find("^Smelted") or msg:find("^RETRY") or msg:find("^plan:") or msg:find("^  step") or msg:find("^Came up")) then return end
   local line = "[day " .. os.day() .. " " .. textutils.formatTime(os.time(), false) .. "] " .. msg
   local old = {}
   if fs.exists("craft_log.txt") then
@@ -1758,6 +1758,9 @@ local function chainCraft(t)
     if steps then break end
   end
   if not steps then return 0, "missing ingredients that can't be crafted" end
+  t.plan = {}
+  for _, st in ipairs(steps) do t.plan[#t.plan + 1] = itemName(st.out) .. " x" .. (st.crafts * (st.rc.n or 1)) end
+  pcall(logResult, (t.retried and "RETRY plan: " or "plan: ") .. table.concat(t.plan, " -> ") .. " -> " .. t.name .. " x" .. t.crafts)
   local total = #steps + 1
   for i, st in ipairs(steps) do
     local name = itemName(st.out)
@@ -1769,6 +1772,7 @@ local function chainCraft(t)
       made, err = autoCraft({ rc = st.rc, out = st.out, crafts = st.crafts, name = name,
         step = "Step " .. i .. "/" .. total .. ": " })
     end
+    pcall(logResult, "  step " .. i .. ": " .. name .. " - wanted " .. (st.crafts * (st.rc.n or 1)) .. ", turtle made " .. tostring(made) .. (err and (" - " .. err) or ""))
     if err then pickupToStorage(SM.realId(R.id[st.out])); return 0, "while making " .. name .. ": " .. err end
     SM.learnDouble(R.id[st.out], currentPickup())
     pickupToStorage(SM.realId(R.id[st.out]))
@@ -2653,11 +2657,11 @@ local function worker()
         if err and not t.retried and (err:find("couldn't take enough", 1, true) or err:find("ran out of", 1, true)) and made < t.crafts then
           -- a step came up short (its ingredients are back in storage): plan again from the real counts, once
           scan()
-          setStatus("Came up short - planning again and retrying " .. t.name .. "...", YELLOW)
+          setStatus("Came up short (" .. err .. ") - planning again and retrying " .. t.name .. "...", YELLOW)
           queue({ kind = "autocraft", rc = t.rc, out = t.out, crafts = t.crafts - made, name = t.name, retried = true, before = made })
         elseif err then
           made = made + (t.before or 0)
-          setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err, made > 0 and YELLOW or RED)
+          setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err .. (t.retried and " (even after a retry)" or ""), made > 0 and YELLOW or RED)
         else
           made = made + (t.before or 0)
           setStatus("Crafted " .. commas(made) .. " " .. t.name .. (parts and parts > 0 and (" (made " .. parts .. " part" .. (parts == 1 and "" or "s") .. " first)") or "") .. " - it's in the pickup", LIME)
