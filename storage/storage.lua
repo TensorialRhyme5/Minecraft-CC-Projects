@@ -1876,6 +1876,11 @@ local function autoCraft(t)
   local id = findCrafter(true)
   if not id then return 0, "no crafter turtle found on the network" end
   local remaining, made = t.crafts, 0
+  -- a recipe that upgrades the very thing it makes (Turtle + pickaxe -> Mining Turtle)
+  local realOut, selfUp, putAway = SM.realId(R.id[t.out]), false, 0
+  for _, g in ipairs(recipeSlots(t.rc)) do
+    if g > 0 then for _, it in ipairs(groupItems(g)) do if SM.realId(R.id[it]) == realOut then selfUp = true end end end
+  end
   while remaining > 0 do
     scan()
     local pk = currentPickup()
@@ -1912,7 +1917,13 @@ local function autoCraft(t)
     if not reply.ok then SM.giveBack(need); return made, reply.err or "craft failed" end
     made = made + (reply.made or 0)
     remaining = remaining - k
+    if remaining > 0 and selfUp then
+      -- move the finished ones out of the barrel first, or the next round could grab one and try to
+      -- upgrade it a second time (the game says no)
+      SM.returnToStorage(realOut); putAway = putAway + (reply.made or 0)
+    end
   end
+  if putAway > 0 then t.putAway = putAway end
   return made
 end
 
@@ -3412,7 +3423,8 @@ local function worker()
           setStatus((made > 0 and ("Made " .. commas(made) .. " " .. t.name .. ", then stopped: ") or "Couldn't craft: ") .. err .. (t.retried and " (even after a retry)" or ""), made > 0 and YELLOW or RED)
         else
           made = made + (t.before or 0)
-          setStatus("Crafted " .. commas(made) .. " " .. t.name .. (parts and parts > 0 and (" (made " .. parts .. " part" .. (parts == 1 and "" or "s") .. " first)") or "") .. " - it's in the pickup", LIME)
+          setStatus("Crafted " .. commas(made) .. " " .. t.name .. (parts and parts > 0 and (" (made " .. parts .. " part" .. (parts == 1 and "" or "s") .. " first)") or "") ..
+            (t.putAway and (" - the last one is in the pickup, the other " .. t.putAway .. " are in storage") or " - it's in the pickup"), LIME)
           if speaker then pcall(speaker.playNote, "chime", 1, 16) end
         end
         scan()
