@@ -3,6 +3,9 @@
 --  Hands out turns at the drop-off / fuel chests, tells the turtles
 --  which junk blocks storage still wants (keeps 1,000 of each),
 --  shows what every turtle is doing, and R / G recalls / sends them.
+--  Also keeps the quarry plan: which 3-block layers of each chunk are
+--  done or being mined, and hands the next one (top first) to whichever
+--  turtle asks, so 3 turtles can share a chunk without overlapping.
 -- ============================================================
 local PROTO = "minenet"
 local CFG = { keep = 1000, junk = {}, exclude = {}, inputs = {} }
@@ -33,6 +36,77 @@ if fs.exists("mine_ores.txt") then
   local f = fs.open("mine_ores.txt", "r")
   for l in (f.readAll() or ""):gmatch("[^\n]+") do found[#found + 1] = l end
   f.close()
+end
+
+-- the layers of a chunk, top first. MUST match CONF.bands in miner.lua.
+local BANDS = { { top = 128, bottom = 65 }, { top = 252, bottom = 129 }, { top = 64, bottom = -63 } }
+local LAYERS = {}
+for _, b in ipairs(BANDS) do
+  local y = b.top - 1
+  local first = #LAYERS + 1
+  while y - 1 >= b.bottom do LAYERS[#LAYERS + 1] = y; y = y - 3 end
+  if LAYERS[#LAYERS] - 1 > b.bottom then LAYERS[#LAYERS + 1] = b.bottom + 1 end
+end
+table.sort(LAYERS, function(a, b) return a > b end)
+local PLAN = {}                                   -- [chunk] = { done = { [y] = true }, claim = { [y] = { n =, at = } } }
+if fs.exists("mine_plan.txt") then
+  local f = fs.open("mine_plan.txt", "r")
+  local ok, t = pcall(textutils.unserialize, f.readAll()); f.close()
+  if ok and type(t) == "table" then PLAN = t end
+end
+local function savePlan() local f = fs.open("mine_plan.txt", "w"); f.write(textutils.serialize(PLAN)); f.close() end
+local function chunkPlan(c)
+  local p = PLAN[c] or {}
+  p.done, p.claim = p.done or {}, p.claim or {}
+  PLAN[c] = p
+  return p
+end
+local STARTED = os.clock()
+local function claimLayer(n, m)
+  local c = tonumber(m.chunk)
+  if not c then return nil end
+  local p = chunkPlan(c)
+  if type(m.mig) == "table" and type(m.mig.done) == "table" then          -- old turtle: what it already did
+    for _, y in ipairs(m.mig.done) do p.done[y] = true; p.claim[y] = nil end
+  end
+  if m.fin then p.done[m.fin] = true; p.claim[m.fin] = nil end
+  for cc, pp in pairs(PLAN) do                                            -- a turtle works one layer at a time
+    for y, cl in pairs(pp.claim or {}) do
+      if cl.n == n and not (cc == c and y == m.have) then pp.claim[y] = nil end
+    end
+  end
+  local now = os.epoch("utc")
+  local function free(y)
+    if p.done[y] then return false end
+    local cl = p.claim[y]
+    -- a turtle that's been silent for 30 min (and we've been up a while to hear it) gives its layer up
+    return not cl or cl.n == n or (now - (cl.at or 0) > 30 * 60 * 1000 and os.clock() - STARTED > 120)
+  end
+  local give, gc, wait
+  if m.have and free(m.have) then give, gc = m.have, c
+  else
+    -- the earliest chunk of this turtle's group that still has a free layer (top first)
+    local list = type(m.chunks) == "table" and m.chunks or { c }
+    for _, cc in ipairs(list) do
+      p = chunkPlan(tonumber(cc) or c)
+      for _, y in ipairs(LAYERS) do
+        if free(y) then give, gc = y, tonumber(cc) or c; break end
+        if not p.done[y] then wait = true end                            -- someone else is still on it
+      end
+      if give then break end
+    end
+  end
+  if give then chunkPlan(gc).claim[give] = { n = n, at = now } end
+  savePlan()
+  return give, gc, wait
+end
+local function progress(c)                         -- layers done, being mined, total
+  local p = PLAN[c]
+  if not p then return 0, 0, #LAYERS end
+  local d, w = 0, 0
+  for _ in pairs(p.done or {}) do d = d + 1 end
+  for _ in pairs(p.claim or {}) do w = w + 1 end
+  return d, w, #LAYERS
 end
 
 local function recount()
@@ -113,6 +187,12 @@ local function handle(from, m)
   local n = tonumber(m.n)
   if m.t == "status" and n then
     turtles[n] = m; m.at = os.clock(); m.from = from
+    local p = tonumber(m.chunk) and PLAN[tonumber(m.chunk)]                  -- still alive: keep its layer
+    local cl = p and p.claim and m.layer and p.claim[m.layer]
+    if cl and cl.n == n then cl.at = os.epoch("utc") end
+  elseif m.t == "claim" and n then
+    local y, gc, wait = claimLayer(n, m)
+    reply(from, { t = "claim", y = y, chunk = gc, wait = (not y and wait) or nil }, m.id)
   elseif m.t == "lock" and n then
     local l = locks[m.dock]
     if not l or l.n == n or os.clock() - l.at > 180 then
@@ -127,15 +207,7 @@ local function handle(from, m)
     lastCount = -100; recount()
     local needs = {}
     for _, id in ipairs(CFG.junk) do needs[id] = 1e9 end              -- no cap: bring all of it home
-    -- which chunks have a helper turtle, and who is mining each chunk's bottom (heard from in the last 10 min)
-    local helpers, bottom = {}, {}
-    for tn, t in pairs(turtles) do
-      if os.clock() - t.at < 600 and tonumber(t.chunk) then
-        if t.helper then helpers[t.chunk] = true end
-        if t.band == 3 and (not bottom[t.chunk] or tn < bottom[t.chunk]) then bottom[t.chunk] = tn end
-      end
-    end
-    reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = false, helpers = helpers, bottom = bottom }, m.id)
+    reply(from, { t = "needs", needs = needs, junk = CFG.junk, fuelLow = false }, m.id)
   elseif m.t == "found" and m.name then
     local line = m.name .. " at " .. m.x .. " " .. m.y .. " " .. m.z .. " (turtle " .. tostring(n) .. ")"
     for _, l in ipairs(found) do if l == line then return end end
@@ -199,7 +271,7 @@ local function draw()
   for _, n in ipairs(ns) do
     local t = turtles[n]
     local age = os.clock() - t.at
-    local tag = (n < 10 and " " or "") .. n .. (t.helper and "b" or " ") .. " "
+    local tag = (n < 10 and " " or "") .. n .. " "
     term.setTextColour(age > 60 and colors.red or colors.lime)
     if two then
       print(tag .. tostring(t.state):sub(1, w - #tag))
@@ -214,20 +286,29 @@ local function draw()
       term.setCursorPos(w - #tail + 1, cy); print(tail)
     end
   end
+  term.setTextColour(colors.cyan)
+  local cs = {}
+  for c in pairs(PLAN) do cs[#cs + 1] = c end
+  table.sort(cs)
+  local line = ""
+  for _, c in ipairs(cs) do
+    local d, _, tot = progress(c)
+    line = line .. " " .. c .. ":" .. math.floor(d * 100 / tot)
+  end
+  if line ~= "" then print("Done%" .. line) end
   term.setTextColour(colors.white)
   local busy = {}
   for d, l in pairs(locks) do busy[#busy + 1] = d .. "=" .. l.n end
-  print("Chest turns: " .. (#busy > 0 and table.concat(busy, " ") or "free"))
-  print("Fuel chest: " .. (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and "  (low)" or "")) or
-    ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
+  print("Turns: " .. (#busy > 0 and table.concat(busy, " ") or "free") .. "  Fuel: " ..
+    (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and " (LOW)" or "")) or ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
   term.setTextColour(colors.white)
-  print("Chests: " .. chestCount.iron .. " iron (ores), " .. chestCount.copper .. " copper (junk)" ..
-    (moved > 0 and ("  moved " .. moved .. " to the right kind") or ""))
-  if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
+  write("Chests: " .. chestCount.iron .. " iron, " .. chestCount.copper .. " copper")
   if chestCount.fill then
     term.setTextColour(chestCount.fill >= 0.75 and colors.orange or colors.white)
-    print("Junk chests " .. math.floor(chestCount.fill * 100) .. "% full (auto-trash 10,000 at 75%)")
+    write("  junk " .. math.floor(chestCount.fill * 100) .. "% full")
   end
+  print("")
+  if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
   print("R recall G work U update  #+Enter items" .. (typed ~= "" and ("  [" .. typed .. "]") or ""))
@@ -259,4 +340,5 @@ local function screen()
     until ev == "timer" and p == t
   end
 end
+if _G.__MINEBASE_TEST then return { handle = handle, PLAN = function() return PLAN end, draw = draw, turtles = turtles } end
 parallel.waitForAny(net, screen)

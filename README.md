@@ -119,12 +119,14 @@ take turns at the chests (the mine computer gives out the turns).
   `mining/mine_startup.lua` as `startup.lua`. It runs the same storage program as home (titled MINE) plus a
   "Turtles" tab with each turtle's status. Press **R** there to recall them all and **G** to send them back.
   On first boot it finds the drop-off chests and the fuel chest (the wooden chest holding only coal).
-- **Turtle numbers:** 1-4 mine the top (grass to y 65) of chunks 1-4; 5-8 are helpers that mine the bottom
-  (y 64 to -63) of chunks 1-4 at the same time, from the opposite corner; 9-12 / 13-16 do the same for chunks 5-8,
-  the next 2x2 south (x -96..-65, z -2208..-2177 - force-load those too). Without a helper, a top turtle does the
-  bottom itself when it's done.
+- **Turtle numbers / groups:** turtle n works in group (n-1)%4+1, three to a chunk: 1 5 9 on chunk 1, 2 6 10 on chunk 2,
+  3 7 11 on chunk 3, 4 8 12 on chunk 4 (13-16 would be a 4th per chunk). The mine computer keeps the plan
+  (`mine_plan.txt`) and hands out one 3-block layer at a time, top to bottom, so turtles sharing a chunk never dig the
+  same layer; each uses its own corner to go up and down. When a chunk is all handed out the group moves to its chunk
+  in the next 2x2 south (chunks 5-8: x -96..-65, z -2208..-2177 - force-load those). A layer whose turtle goes quiet
+  for 30 minutes is handed to someone else.
 - **Turtles:** install `mining/miner_startup.lua` as `startup.lua`, put 16 coal in the turtle, place it on
-  **top of the fuel chest**, reboot, and type its number (1-4). It works out which way it faces by itself.
+  **top of the fuel chest**, reboot, and type its number (1-12). It works out which way it faces by itself.
 - Junk (stone, cobble, deepslate, tuff, granite, diorite, andesite, dirt, gravel, ...) goes to the copper chests,
   everything else to the iron chests. Storage keeps 1,000 of each junk block; turtles leave extra junk behind.
 - Coal: every coal goes into the fuel chest, the turtle fills itself to 2,000 fuel, and half of what it brought
