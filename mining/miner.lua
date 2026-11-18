@@ -112,7 +112,9 @@ local function ahead(dir)
   return P.x + DX[P.f + 1], P.y, P.z + DZ[P.f + 1]
 end
 -- one block in a direction. Breaks what's in the way (never inside the base, never another turtle).
+local STEP_PAT                                  -- (how long to wait for a turtle in the way, when not given)
 local function step(dir, noDig, patience)
+  patience = patience or STEP_PAT
   local tx, ty, tz = ahead(dir)
   local tries = 0
   while true do
@@ -148,7 +150,8 @@ local function face(f)
 end
 -- Two turtles meeting in one column: the one going UP always has right of way, the one going
 -- down backs up a block and waits, so they can never block each other for good.
-local function vert(ty, noDig)
+local BLOCKER                                  -- where a turtle that won't move is sitting
+local function vert(ty, noDig, maxBack)
   local guard, backoffs = 0, 0
   while P.y ~= ty do
     guard = guard + 1
@@ -157,7 +160,10 @@ local function vert(ty, noDig)
     local ok, why, what = step(down and "down" or "up", noDig, down and 4 or nil)
     if not ok and why == "turtle" and down then
       backoffs = backoffs + 1
-      if backoffs > 60 then return false, "turtle" end                -- (a turtle that never moves: broken)
+      if backoffs > (maxBack or 60) then                              -- (a turtle that never moves: out of fuel / broken)
+        BLOCKER = P.x .. " " .. (P.y - 1) .. " " .. P.z
+        return false, "turtle"
+      end
       if turtle.getFuelLevel() > 200 then step("up", noDig, 4) end
       ping("letting another turtle past", true)
       sleep(2 + math.random() * 4)
@@ -186,9 +192,13 @@ local function horiz(axis, t, noDig)
     if axis == "x" then face(t > P.x and 1 or 3) else face(t > P.z and 2 or 0) end
     local ok, why, what = step("fwd", noDig)
     if not ok then
+      if why == "turtle" and P.y > CONF.fuelChest.y + 2 then          -- up in the air: fly over it
+        if not step("up", noDig, 30) then return false, why end
+      else
       if why ~= "unbreakable" then return false, why end
       note(what)
       if not step("up", noDig) and not step("down", noDig) then return false, why end   -- hop over it
+      end
     end
   end
   return true
@@ -304,13 +314,23 @@ local function lost(name)                                -- our map is wrong: st
   print("Pick me up, put me on top of the fuel chest, reboot.")
   while true do ping("LOST - pick me up, put me on the fuel chest and reboot", true); sleep(10) end
 end
-local function useDock(name, chest, fn)
+-- quick: give up (return false) as soon as a stuck turtle blocks this chest, so we can use another one
+local function useDock(name, chest, fn, quick)
   local L = lane()
-  for _ = 1, 30 do
+  for _ = 1, 1000 do
     if not vert(L) then return false end
-    if not goTo(chest.x + 3, L, chest.z) then return false end           -- wait beside the column
+    STEP_PAT = 30
+    goTo(chest.x + 3, L, chest.z)                                         -- wait beside the column (or near it,
+    STEP_PAT = nil                                                        --  if a stuck turtle is in that spot)
     lock(name)
-    goTo(chest.x, L, chest.z); vert(chest.y + 1, true)
+    BLOCKER = nil
+    STEP_PAT = 15
+    local okH = goTo(chest.x, L, chest.z)
+    STEP_PAT = nil
+    if not okH and P.x ~= chest.x then                                    -- a turtle that won't move, right in our way
+      BLOCKER = (P.x + DX[P.f + 1]) .. " " .. P.y .. " " .. (P.z + DZ[P.f + 1])
+    end
+    if okH then vert(chest.y + 1, true, 10) end
     local there = P.x == chest.x and P.z == chest.z and P.y == chest.y + 1
     local okI, d = turtle.inspectDown()
     local below = okI and type(d) == "table" and tostring(d.name) or nil
@@ -321,9 +341,17 @@ local function useDock(name, chest, fn)
     vert(L, true)
     unlock(name)
     if there then return true end
-    goTo(chest.x + 3, L, chest.z)                                         -- something was in the way: try again
-    ping("couldn't get onto the " .. name .. " chest - trying again", true)
-    sleep(5 + math.random() * 10)
+    STEP_PAT = 30; goTo(chest.x + 3, L, chest.z); STEP_PAT = nil       -- something was in the way: try again
+    if BLOCKER and quick then
+      ping("a stuck turtle is above the " .. name .. " chest at " .. BLOCKER .. " - remove it", true)
+      return false, "blocked"
+    elseif BLOCKER then
+      ping("a stuck turtle is above the " .. name .. " chest at " .. BLOCKER .. " - remove it", true)
+      sleep(30 + math.random() * 30)                                     -- let the others have a go meanwhile
+    else
+      ping("couldn't get onto the " .. name .. " chest - trying again", true)
+      sleep(5 + math.random() * 10)
+    end
   end
   return false
 end
@@ -404,9 +432,19 @@ local function dockRun(why)
   ping(why or "heading home", true)
   if inQ(P.x, P.z) then tidy(); horiz("z", S.z); horiz("x", S.x) end    -- back along rows already dug
   vert(lane())
-  useDock("drop" .. dropNo(), dropDock(), dropAll)
+  local a = dropNo()
+  while not (useDock("drop" .. a, CONF.drops[a], dropAll, true) or
+             useDock("drop" .. (3 - a), CONF.drops[3 - a], dropAll, true)) do   -- blocked: use the other one
+    ping("both drop-off chests are blocked by stuck turtles - remove them", true)
+    sleep(60)
+  end
   updateNeeds()
-  useDock("fuel", CONF.fuelChest, fuelStop)
+  while not useDock("fuel", CONF.fuelChest, fuelStop, true) do
+    -- fuel chest blocked by a stuck turtle: carry on if we have plenty, otherwise wait for it to be removed
+    if turtle.getFuelLevel() > costHome() + 2 * (lane() - CONF.bands[#CONF.bands].bottom) + 300 then break end
+    ping("the fuel chest is blocked by a stuck turtle - remove it (" .. tostring(BLOCKER) .. ")", true)
+    sleep(60)
+  end
 end
 local function park(final)
   local d = dropDock()

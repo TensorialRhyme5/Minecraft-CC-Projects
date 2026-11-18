@@ -291,6 +291,16 @@ local function draw()
       term.setCursorPos(w - #tail + 1, cy); print(tail)
     end
   end
+  local silent = {}                                  -- turtles with a layer in the plan that we haven't heard from
+  local seen = {}
+  for _, p in pairs(PLAN) do for _, cl in pairs(p.claim or {}) do
+    if not turtles[cl.n] and not seen[cl.n] then seen[cl.n] = true; silent[#silent + 1] = cl.n end
+  end end
+  if #silent > 0 then
+    table.sort(silent)
+    term.setTextColour(colors.red)
+    print("Not heard from: " .. table.concat(silent, " ") .. " (out of fuel? stuck?)")
+  end
   term.setTextColour(colors.cyan)
   local cs = {}
   for c in pairs(PLAN) do cs[#cs + 1] = c end
