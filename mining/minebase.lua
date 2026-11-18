@@ -149,7 +149,7 @@ local function recount()
         if fuelNames[name] then fc = fc or 0 end            -- connected, even if it's empty right now
         for _, it in pairs(l) do
           if fuelNames[name] then
-            if it.name == "minecraft:coal" or it.name == "minecraft:charcoal" then fc = (fc or 0) + it.count end
+            if it.name:find("coal", 1, true) and not it.name:find("ore", 1, true) then fc = (fc or 0) + it.count end
           elseif isJunk[it.name] then c[it.name] = (c[it.name] or 0) + it.count end
         end
       end
@@ -204,6 +204,10 @@ local function resort()
         end
       end
     end
+  end
+  for fname in pairs(fuelNames) do                      -- things dropped in the fuel chest by mistake go to storage
+    moveOut({ fname }, fe, function(id) return not isJunk[id] and not (id:find("coal", 1, true) and not id:find("ore", 1, true)) end)
+    moveOut({ fname }, cu, function(id) return isJunk[id] end)
   end
   moveOut(cu, fe, function(id) return not isJunk[id] end)
   moveOut(fe, cu, function(id) return isJunk[id] end)

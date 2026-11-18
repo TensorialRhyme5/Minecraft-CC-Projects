@@ -30,7 +30,9 @@ local CONF = {
 }
 local PROTO = "minenet"
 local POSFILE, JOBFILE = "miner_pos.txt", "miner_job.txt"
-local COAL = { ["minecraft:coal"] = true, ["minecraft:charcoal"] = true }
+-- coal, charcoal and their blocks (any mod's) - but not coal ORE
+local COAL = setmetatable({}, { __index = function(_, n)
+  n = tostring(n); return n:find("coal", 1, true) ~= nil and not n:find("ore", 1, true) end })
 local DX, DZ = { 0, 1, 0, -1 }, { -1, 0, 1, 0 }                   -- facing 0=N 1=E 2=S 3=W
 
 -- ---------------------------------------------------------- saved state
@@ -424,13 +426,24 @@ local function fuelStop()
       if not turtle.refuel(1) then break end
     end
   end
+  local junkTries = 0
   for _ = 1, 40 do                                                     -- top up from the chest
     local needItems = math.ceil((CONF.fuelTarget - turtle.getFuelLevel()) / 80)
     if needItems <= 0 then break end
+    turtle.select(k)
     if not turtle.suckDown(math.min(64, needItems)) then break end
-    burnK()
-    if turtle.getItemCount(k) > 0 then break end                       -- (not burnable: leave it)
+    if not turtle.refuel(0) then                                       -- not fuel (dropped in by mistake):
+      junkTries = junkTries + 1                                        -- keep it for storage, try the next stack
+      k = nil
+      for s = 1, 16 do if turtle.getItemCount(s) == 0 then k = s; break end end
+      if not k or junkTries > 6 then break end
+    else
+      burnK()
+      if turtle.getItemCount(k) > 0 then break end                     -- (topped up)
+    end
   end
+  if not k then for s = 1, 16 do if turtle.getItemCount(s) == 0 then k = s; break end end end
+  if not k then k = 16 end
   -- fuel chest empty and we can't make it out and back: sit right here until fuel shows up
   local need = costHome() + 2 * (lane() - CONF.bands[#CONF.bands].bottom) + 300
   while turtle.getFuelLevel() < need do
@@ -443,7 +456,7 @@ local function fuelStop()
     if turtle.suckDown(64) then burnK() end
   end
   turtle.select(k)
-  if turtle.getItemCount(k) > 0 then turtle.dropDown() end             -- what we didn't burn goes back
+  if turtle.getItemCount(k) > 0 and turtle.refuel(0) then turtle.dropDown() end   -- unburned fuel goes back
   JOB.carry = nil; saveJob()
   turtle.select(1)
 end
@@ -499,7 +512,9 @@ local function setup()
   if onChest and peripheral.getType and peripheral.getType("bottom") then
     local okL, l = pcall(peripheral.call, "bottom", "list")
     if okL and type(l) == "table" then
-      for _, it in pairs(l) do if it.name ~= "minecraft:coal" and it.name ~= "minecraft:charcoal" then onChest = false end end
+      local fuelish = 0
+      for _, it in pairs(l) do if COAL[it.name] then fuelish = fuelish + 1 end end
+      if fuelish == 0 and next(l) then onChest = false end              -- (a few stray items in it are fine)
     end
   end
   if not onChest then
