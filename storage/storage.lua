@@ -936,6 +936,53 @@ do
     end
     return n
   end
+  -- mine: when the junk (copper) chests get 3/4 full, burn 10,000 junk blocks - the biggest piles first
+  SM.auto = { at = -1e9, fill = nil }
+  function SM.junkFill()
+    local want = CFG.junkTo or "copper"
+    local bySize = (CFG.sizeKind or {})[want] or {}
+    local cap, used = 0, 0
+    for _, name in ipairs(storages) do
+      if name:find(want, 1, true) or bySize[CFG.sizeOf[name] or 0] then
+        local okS, size = pcall(peripheral.call, name, "size")
+        local okL, lim = pcall(peripheral.call, name, "getItemLimit", 1)
+        local okI, l = pcall(peripheral.call, name, "list")
+        if okS and type(size) == "number" then
+          cap = cap + size * ((okL and type(lim) == "number" and lim > 0) and lim or 64)
+          if okI and type(l) == "table" then for _, it in pairs(l) do used = used + it.count end end
+        end
+      end
+    end
+    return cap > 0 and used / cap or nil, used, cap
+  end
+  function SM.autoTrashLoop()
+    if CFG.title ~= "MINE" then while true do sleep(3600) end end
+    sleep(30)
+    while true do
+      local f = SM.junkFill()
+      SM.auto.fill = f
+      local drops, relay = SM.trashParts()
+      if f and f >= (CFG.trashAt or 0.75) and #drops > 0 and relay and not SM.auto.running and now() - SM.auto.at > 300 then
+        local piles = {}
+        for id, e in pairs(index) do if CFG.isJunk[(id:gsub("#.*$", ""))] and e.count > 0 then piles[#piles + 1] = { id = id, n = e.count } end end
+        table.sort(piles, function(a, b) return a.n > b.n end)
+        local left = CFG.trashAmount or 10000
+        local jobs = {}
+        for _, pl in ipairs(piles) do
+          if left <= 0 then break end
+          local n = math.min(left, pl.n)
+          jobs[#jobs + 1] = { kind = "trash", id = pl.id, n = n, auto = true }
+          left = left - n
+        end
+        if #jobs > 0 then
+          SM.auto.at, SM.auto.running = now(), #jobs
+          setStatus("Junk chests " .. math.floor(f * 100) .. "% full - trashing " .. commas((CFG.trashAmount or 10000) - left) .. " junk blocks", ORANGE)
+          for _, j in ipairs(jobs) do SM.queueTrash(j) end
+        end
+      end
+      sleep(60)
+    end
+  end
   function SM.trash(t, show)
     local drops, relay = SM.trashParts()
     if #drops == 0 then setStatus("Couldn't trash: no droppers on the network", RED); return end
@@ -3303,8 +3350,12 @@ local function worker()
         rebuildList()
         setStatus("You can craft " .. commas(n) .. " things right now", LIME)
       elseif t.kind == "trash" then
-        SM.trash(t, function(m) busy = m end)
+        SM.trash(t, function(m) busy = (t.auto and "Auto-trash: " or "") .. m end)
         busy = nil
+        if t.auto and SM.auto.running then
+          SM.auto.running = SM.auto.running - 1
+          if SM.auto.running <= 0 then SM.auto.running = nil; setStatus("Auto-trash done - junk chests have room again", LIME) end
+        end
       elseif t.kind == "sendhome" then
         -- through the dimensional chest; home takes things out as they arrive, so keep feeding it
         local sent, idle = 0, 0
@@ -3437,7 +3488,7 @@ local function smeltLoop()
     SM.tick()
   end
 end
-parallel.waitForAny(ui, worker, netServer, smeltLoop, SM.QY.loop, function()
+parallel.waitForAny(ui, worker, netServer, smeltLoop, SM.QY.loop, SM.autoTrashLoop, function()
   loadRecipes(); rebuildList()
   findCrafter(true)
   statusLoop()

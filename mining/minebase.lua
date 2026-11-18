@@ -74,6 +74,17 @@ local function resort()
     end
   end
   chestCount.copper, chestCount.iron = #cu, #fe
+  local cap, used = 0, 0                                -- how full the junk chests are (auto-trash at 3/4)
+  for _, name in ipairs(cu) do
+    local okS, size = pcall(peripheral.call, name, "size")
+    local okL, lim = pcall(peripheral.call, name, "getItemLimit", 1)
+    local okI, l = pcall(peripheral.call, name, "list")
+    if okS and type(size) == "number" then
+      cap = cap + size * ((okL and type(lim) == "number" and lim > 0) and lim or 64)
+      if okI and type(l) == "table" then for _, it in pairs(l) do used = used + it.count end end
+    end
+  end
+  chestCount.fill = cap > 0 and used / cap or nil
   if #cu == 0 or #fe == 0 then return end
   local budget = 8
   local function moveOut(from, to, wrong)
@@ -213,6 +224,10 @@ local function draw()
   print("Chests: " .. chestCount.iron .. " iron (ores), " .. chestCount.copper .. " copper (junk)" ..
     (moved > 0 and ("  moved " .. moved .. " to the right kind") or ""))
   if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
+  if chestCount.fill then
+    term.setTextColour(chestCount.fill >= 0.75 and colors.orange or colors.white)
+    print("Junk chests " .. math.floor(chestCount.fill * 100) .. "% full (auto-trash 10,000 at 75%)")
+  end
   if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
   print("R recall G work U update  #+Enter items" .. (typed ~= "" and ("  [" .. typed .. "]") or ""))
