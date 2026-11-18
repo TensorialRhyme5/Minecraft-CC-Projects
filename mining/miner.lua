@@ -375,7 +375,18 @@ local function useDock(name, chest, fn, quick)
     if not okH and P.x ~= chest.x then                                    -- a turtle that won't move, right in our way
       BLOCKER = "turtle at " .. (P.x + DX[P.f + 1]) .. " " .. P.y .. " " .. (P.z + DZ[P.f + 1])
     end
-    if okH then vert(chest.y + 1, true, 10) end
+    if okH and vert(chest.y + 2, true, 10) or (okH and P.x == chest.x and P.z == chest.z) then
+      -- feel for the chest: our height can be a block or two off, the chest tells us where we really are
+      for _ = 1, 5 do
+        local okI, d = turtle.inspectDown()
+        if okI and type(d) == "table" and d.name == "minecraft:chest" then
+          if P.y ~= chest.y + 1 then P.y = chest.y + 1; savePos() end
+          break
+        end
+        if okI then break end                                           -- something else below: not our chest
+        if not step("down", true, 4) then break end
+      end
+    end
     if not (P.x == chest.x and P.z == chest.z and P.y == chest.y + 1) and LASTFAIL then BLOCKER = BLOCKER or LASTFAIL end
     local there = P.x == chest.x and P.z == chest.z and P.y == chest.y + 1
     local okI, d = turtle.inspectDown()

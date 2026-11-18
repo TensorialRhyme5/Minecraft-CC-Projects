@@ -254,7 +254,8 @@ local function handle(from, m)
 end
 
 local recalled = false
-local askRedo, lastMsg = false, nil                           -- N pressed: waiting for Y to confirm
+local askRedo, lastMsg = false, nil
+local scroll = 0                                -- first turtle line shown (arrow keys / mouse wheel)                           -- N pressed: waiting for Y to confirm
 -- re-mine every finished layer between y 64 and 1 (the netherrack) in every chunk
 local function redoNether()
   local n = 0
@@ -301,7 +302,7 @@ local function drawInv(n)
   end
   if t then
     term.setTextColour(colors.lightGray)
-    print(tostring(t.state):sub(1, 50))
+    print(tostring(t.state))
     print("free slots " .. tostring(t.free) .. "  fuel " .. tostring(t.fuel) .. "  y " .. tostring(t.y))
   end
   term.setTextColour(colors.gray); print("Any other key = back")
@@ -314,10 +315,20 @@ local function draw()
   local ns = {}
   for n in pairs(turtles) do ns[#ns + 1] = n end
   table.sort(ns)
-  local w = term.getSize()
+  local w, h = term.getSize()
   local two = #ns <= 5                                -- a few turtles: two lines each; lots: one line each
   if #ns == 0 then term.setTextColour(colors.gray); print("no turtles heard from yet") end
-  for _, n in ipairs(ns) do
+  local rows = h - 8                                  -- room left for turtle lines
+  if two then rows = #ns end
+  scroll = math.max(0, math.min(scroll, #ns - rows))
+  local shown = {}
+  for i = scroll + 1, math.min(#ns, scroll + rows) do shown[#shown + 1] = ns[i] end
+  if #ns > rows then                                  -- not all fit: say so
+    term.setTextColour(colors.gray)
+    local _, cy = term.getCursorPos(); term.setCursorPos(w - 20, 1)
+    write(("turtles %d-%d of %d"):format(scroll + 1, scroll + #shown, #ns)); term.setCursorPos(1, cy)
+  end
+  for _, n in ipairs(shown) do
     local t = turtles[n]
     local age = os.clock() - t.at
     local tag = (n < 10 and " " or "") .. n .. " "
@@ -375,7 +386,7 @@ local function draw()
     term.setTextColour(colors.orange)
     print("Re-mine the netherrack (y 64-1) everywhere? Y = yes")
   else
-    print("R recall G go U update N redo nether #+Enter" .. (typed ~= "" and (" [" .. typed .. "]") or ""))
+    print("R recall G go U update N nether ^v #+Enter" .. (typed ~= "" and (" [" .. typed .. "]") or ""))
   end
 end
 
@@ -395,6 +406,10 @@ local function screen()
       elseif ev == "char" and p:match("^%d$") then typed = (typed .. p):sub(-2); draw()
       elseif ev == "key" and p == keys.enter and typed ~= "" then view = tonumber(typed); typed = ""; draw()
       elseif ev == "key" and p == keys.backspace then typed = typed:sub(1, -2); draw()
+      elseif ev == "key" and not view and (p == keys.up or p == keys.down) then
+        scroll = scroll + (p == keys.up and -1 or 1); draw()
+      elseif ev == "mouse_scroll" and not view then
+        scroll = scroll + p; draw()
       elseif ev == "char" and askRedo then
         askRedo = false
         if p == "y" or p == "Y" then
