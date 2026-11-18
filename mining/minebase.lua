@@ -250,6 +250,18 @@ local function handle(from, m)
 end
 
 local recalled = false
+local askRedo, lastMsg = false, nil                           -- N pressed: waiting for Y to confirm
+-- re-mine every finished layer between y 64 and 1 (the netherrack) in every chunk
+local function redoNether()
+  local n = 0
+  for _, p in pairs(PLAN) do
+    for y in pairs(p.done or {}) do
+      if y <= 64 and y >= 1 then p.done[y] = nil; n = n + 1 end
+    end
+  end
+  savePlan()
+  return n
+end
 local view = nil                                -- a turtle number: showing what it carries
 local typed = ""                                -- digits typed so far
 local function pretty(id)
@@ -352,9 +364,15 @@ local function draw()
   end
   print("")
   if chestCount.iron == 0 then term.setTextColour(colors.red); print("No iron chests found - right-click their modems?") end
-  if #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
+  if lastMsg then term.setTextColour(colors.lime); print(lastMsg)
+  elseif #found > 0 then term.setTextColour(colors.orange); print("Too hard to mine: " .. #found .. " spots (mine_ores.txt)") end
   term.setTextColour(colors.lightGray)
-  print("R recall G work U update  #+Enter items" .. (typed ~= "" and ("  [" .. typed .. "]") or ""))
+  if askRedo then
+    term.setTextColour(colors.orange)
+    print("Re-mine the netherrack (y 64-1) everywhere? Y = yes")
+  else
+    print("R recall G go U update N redo nether #+Enter" .. (typed ~= "" and (" [" .. typed .. "]") or ""))
+  end
 end
 
 local function net()
@@ -373,6 +391,14 @@ local function screen()
       elseif ev == "char" and p:match("^%d$") then typed = (typed .. p):sub(-2); draw()
       elseif ev == "key" and p == keys.enter and typed ~= "" then view = tonumber(typed); typed = ""; draw()
       elseif ev == "key" and p == keys.backspace then typed = typed:sub(1, -2); draw()
+      elseif ev == "char" and askRedo then
+        askRedo = false
+        if p == "y" or p == "Y" then
+          local n = redoNether()
+          lastMsg = "Re-mining " .. n .. " netherrack layers"
+        end
+        draw()
+      elseif ev == "char" and (p == "n" or p == "N") then askRedo = true; draw()
       elseif ev == "char" and (p == "r" or p == "R") then
         recalled = true; rednet.broadcast({ t = "cmd", cmd = "recall" }, PROTO)
       elseif ev == "char" and (p == "u" or p == "U") then
@@ -383,5 +409,5 @@ local function screen()
     until ev == "timer" and p == t
   end
 end
-if _G.__MINEBASE_TEST then return { handle = handle, PLAN = function() return PLAN end, draw = draw, turtles = turtles } end
+if _G.__MINEBASE_TEST then return { handle = handle, PLAN = function() return PLAN end, draw = draw, turtles = turtles, redo = redoNether } end
 parallel.waitForAny(net, screen)

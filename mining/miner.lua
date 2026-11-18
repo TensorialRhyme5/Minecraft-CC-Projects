@@ -653,12 +653,17 @@ local function mine()
         if turtle.getFuelLevel() < need then burnCarried(need + 600) end
         if turtle.getFuelLevel() < need then dockRun("low on fuel") end
         local okR, whyR = reach(JOB.cell, y)
-        if not okR and (whyR == "unbreakable" or whyR == "turtle") and inQ(P.x, P.z) then   -- (a turtle that won't move: a broken one)
-          JOB.cell = JOB.cell + 1; saveJob()                           -- a block we can't break: skip that spot
+        if not okR and whyR == "turtle" and inQ(P.x, P.z) and (JOB.blocked or 0) < 6 then
+          JOB.blocked = (JOB.blocked or 0) + 1                         -- another turtle in the way: wait, don't skip
+          ping("another turtle is in my way - waiting", true)
+          sleep(10 + math.random() * 10)
+        elseif not okR and (whyR == "unbreakable" or whyR == "turtle") and inQ(P.x, P.z) then   -- (a turtle that never moves: broken)
+          JOB.cell = JOB.cell + 1; JOB.blocked = nil; saveJob()        -- a block we can't break: skip that spot
         elseif not okR or not inQ(P.x, P.z) or P.y ~= y then
           ping("can't get to my chunk (" .. tostring(whyR or "?") .. ") - is something in the way?", true)
           sleep(15)
         else
+          JOB.blocked = nil
           clearUpDown(y)
           if freeSlots() <= 2 then tidy() end
           if freeSlots() <= 1 then dockRun("inventory full") end
