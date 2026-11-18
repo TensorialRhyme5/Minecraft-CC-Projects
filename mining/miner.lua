@@ -638,6 +638,18 @@ if JOB and JOB.chunk == nil then
   JOB = { n = JOB.n, chunk = oc, layer = cur, cell = cur and JOB.cell or 0, carry = JOB.carry, mig = { done = done } }
   saveJob()
 end
+-- sitting on a wooden chest but our saved position isn't on top of any of our chests: that position is
+-- wrong (we were picked up and put back on the fuel chest). Forget it and set up again.
+if P then
+  local okB, below = turtle.inspectDown()
+  if okB and type(below) == "table" and below.name == "minecraft:chest" then
+    local onOurs = false
+    for _, c in ipairs({ CONF.fuelChest, CONF.drops[1], CONF.drops[2] }) do
+      if P.x == c.x and P.y == c.y + 1 and P.z == c.z then onOurs = true end
+    end
+    if not onOurs then P = nil; if fs.exists(POSFILE) then fs.delete(POSFILE) end end
+  end
+end
 if JOB then place() end
 if not JOB or not P then setup(); place() end
 print("Miner " .. JOB.n .. ": chunk " .. CH .. " at " .. Q.x .. " " .. Q.z .. ", corner " .. K)
