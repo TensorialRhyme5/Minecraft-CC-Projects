@@ -369,12 +369,12 @@ end
 local recalled = false
 local askRedo, lastMsg = false, nil
 local scroll = 0                                -- first turtle line shown (arrow keys / mouse wheel)                           -- N pressed: waiting for Y to confirm
--- re-mine every finished layer between y 64 and 1 (the netherrack) in every chunk
+-- re-mine every finished layer between y 64 and -63 (netherrack + end stone) in every chunk
 local function redoNether()
   local n = 0
   for _, p in pairs(PLAN) do
     for y in pairs(p.done or {}) do
-      if y <= 64 and y >= 1 then p.done[y] = nil; n = n + 1 end
+      if y <= 64 and y >= -63 then p.done[y] = nil; n = n + 1 end
     end
   end
   savePlan()
@@ -497,9 +497,9 @@ local function draw()
   term.setTextColour(colors.lightGray)
   if askRedo then
     term.setTextColour(colors.orange)
-    print("Re-mine the netherrack (y 64-1) everywhere? Y = yes")
+    print("Re-mine netherrack+end stone (y 64 to -63)? Y=yes")
   else
-    print("R recall G go U update N nether ^v #+Enter" .. (typed ~= "" and (" [" .. typed .. "]") or ""))
+    print("R recall G go U update N redo ^v #+Enter" .. (typed ~= "" and (" [" .. typed .. "]") or ""))
   end
 end
 
@@ -527,7 +527,7 @@ local function screen()
         askRedo = false
         if p == "y" or p == "Y" then
           local n = redoNether()
-          lastMsg = "Re-mining " .. n .. " netherrack layers"
+          lastMsg = "Re-mining " .. n .. " netherrack/end stone layers"
         end
         draw()
       elseif ev == "char" and (p == "n" or p == "N") then askRedo = true; draw()
