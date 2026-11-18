@@ -1401,13 +1401,25 @@ local FUZZY_BELOW = 10        -- look for close matches when the normal search f
 
 -- mod filter: the MOD button (UI.mod = "create") and/or "@crea" typed in the search
 function R.modOf(id) return (tostring(id):match("^([^:]+):")) or "" end
+-- picking Create also shows its add-ons (they each have their own id)
+R.FAMILY = { create = { "bellsandwhistles", "copycats", "rechiseledcreate", "aeronautics", "aeronautics_utility_objects", "simulated",
+  "gyro", "createaddition", "createpropulsion", "createmonballsoverhaul", "create_aeronautics_throwable_rope_connector", "sable", "sauce",
+  "vsfluidlink", "crush_depth" } }
+R.inFamily = {}
+for main, l in pairs(R.FAMILY) do for _, ns in ipairs(l) do R.inFamily[ns] = main end end
+function R.famOf(ns)
+  if R.inFamily[ns] then return R.inFamily[ns] end
+  if ns:find("^create_") then return "create" end
+  return ns
+end
 function R.modFilter(q)
   local at = q:match("@(%S*)")
   if at then q = q:gsub("@%S*", ""):gsub("^%s+", ""):gsub("%s+$", "") end
   local want = UI.mod
   return q, function(id)
     local ns = R.modOf(id)
-    return (not want or ns == want) and (not at or at == "" or ns:sub(1, #at) == at)
+    return (not want or ns == want or (R.FAMILY[want] and R.famOf(ns) == want))
+      and (not at or at == "" or ns:sub(1, #at) == at or (R.FAMILY[at] and R.famOf(ns) == at))
   end
 end
 local function rebuildList(quick)
@@ -2277,7 +2289,7 @@ local function drawSearchBar()
   local qry = UI.mode == "quarry"
   local q = UI.search == "" and (rec and "search recipes" or qry and "search the quarry" or "tap letters or type to search") or UI.search
   text(LX1 + 1, 5, qry and "Quarry:" or "Search:", qry and ORANGE or YELLOW, PANEL)
-  if UI.mod then q = "[" .. R.modName(UI.mod) .. "] " .. (UI.search == "" and "" or UI.search) end
+  if UI.mod then q = "[" .. R.modName(UI.mod) .. (R.FAMILY[UI.mod] and "+" or "") .. "] " .. (UI.search == "" and "" or UI.search) end
   local qtxt = fit(q, LX2 - LX1 - 71) .. (UI.search ~= "" and "_" or "")
   if CFG.title ~= "MINE" then
     button("quarry", LX2 - 60, 5, LX2 - 50, 5, qry and "ITEMS" or "QUARRY", BLACK, qry and CYAN or ORANGE, function()
@@ -3051,7 +3063,11 @@ function R.drawMods()
   else
     for id in pairs(index) do local ns = R.modOf(id); counts[ns] = (counts[ns] or 0) + 1 end
   end
-  for ns, c in pairs(counts) do if R.realMod(ns) then list[#list + 1] = { ns = ns, c = c }; seen[ns] = true end end
+  local fc = {}                                          -- a family's main mod also counts its add-ons
+  for ns, c in pairs(counts) do local fam = R.famOf(ns); if fam ~= ns then fc[fam] = (fc[fam] or 0) + c end end
+  for fam in pairs(fc) do if not counts[fam] then list[#list + 1] = { ns = fam, c = fc[fam] }; seen[fam] = true end end
+  for ns, c in pairs(counts) do if R.realMod(ns) then list[#list + 1] = { ns = ns, c = c + (fc[ns] or 0) }; seen[ns] = true end end
+  table.sort(list, function(a, b) if a.c ~= b.c then return a.c > b.c end return a.ns < b.ns end)
   table.sort(list, function(a, b) if a.c ~= b.c then return a.c > b.c end return a.ns < b.ns end)
   local rest = {}
   for _, i in ipairs(R.id or {}) do local ns = R.modOf(i); if R.realMod(ns) and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
@@ -3092,7 +3108,7 @@ function R.drawMods()
     local bg = on and HILITE or ((r % 2 == 0) and PANEL or BLACK)
     fill(x, y, x + colW - 1, y, bg)
     local cnt = m.c > 0 and commas(m.c) or ""
-    text(x, y, slide(R.modName(m.ns), colW - #cnt - 1), on and YELLOW or (m.c > 0 and WHITE or GRAY), bg)
+    text(x, y, slide(R.modName(m.ns) .. (R.FAMILY[m.ns] and " + add-ons" or ""), colW - #cnt - 1), on and YELLOW or (m.c > 0 and WHITE or GRAY), bg)
     if m.c > 0 then text(x + colW - #cnt, y, cnt, CYAN, bg) end
     hit("mod:" .. m.ns, x, y, x + colW - 1, y, function() UI.mod = m.ns; UI.panel = nil; UI.page = 1; rebuildList() end)
   end
