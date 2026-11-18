@@ -408,7 +408,9 @@ local function loadRecipes()
     for _, a in ipairs(adds) do
       local on = tostring(a.other or ""):match(":(.+)$") or "upgrade"
       local adj = UPG[on]
-      local nm = adj and (adj .. " " .. name[a.o]) or (on == "stick" and (name[a.o] .. " (flag)"))
+      local base = name[a.o]
+      local nm = adj and (base:find("^Advanced ") and ("Advanced " .. adj .. " " .. base:sub(10)) or (adj .. " " .. base))
+        or (on == "stick" and (base .. " (flag)"))
         or (name[a.o] .. " + " .. ((a.other and byId[a.other] and name[byId[a.other]]) or on))
       local pid = id[a.o] .. "@" .. (adj and adj:lower() or on)
       local n = byId[pid]
@@ -3576,11 +3578,38 @@ local function smeltLoop()
     SM.tick()
   end
 end
-parallel.waitForAny(ui, worker, netServer, smeltLoop, SM.QY.loop, SM.autoTrashLoop, function()
-  loadRecipes(); rebuildList()
-  findCrafter(true)
-  statusLoop()
-end)
+-- if anything crashes, write it down and show it (a restart would otherwise wipe it off the screen)
+local function guard(fn)
+  return function()
+    local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. (debug and debug.traceback and debug.traceback("", 2) or "") end)
+    if not ok and not tostring(err):find("^Terminated") then error(err, 0) end
+  end
+end
+local okMain, crash = pcall(parallel.waitForAny, guard(ui), guard(worker), guard(netServer), guard(smeltLoop), guard(SM.QY.loop),
+  guard(SM.autoTrashLoop), guard(function()
+    loadRecipes(); rebuildList()
+    findCrafter(true)
+    statusLoop()
+  end))
+if not okMain then
+  local old = ""
+  if fs.exists("crash.txt") then local r = fs.open("crash.txt", "r"); old = r.readAll() or ""; r.close() end
+  local f = fs.open("crash.txt", "w")
+  f.write((old .. "[" .. textutils.formatTime(os.time(), false) .. " day " .. os.day() .. "] " .. tostring(crash) .. "\n"):sub(-20000)); f.close()
+  term.setTextColour(colors.red); print("CRASHED: " .. tostring(crash):match("^[^\n]*")); term.setTextColour(colors.white)
+  print("(saved in crash.txt - send a screenshot of this)")
+  for _, m in ipairs(mons) do
+    pcall(function()
+      m.p.setBackgroundColour(colors.black); m.p.clear(); m.p.setCursorPos(2, 2); m.p.setTextColour(colors.red)
+      m.p.write("STORAGE CRASHED - restarting in 20s")
+      local msg = tostring(crash):match("^[^\n]*")
+      local w = m.p.getSize()
+      for i = 0, 3 do m.p.setCursorPos(2, 4 + i); m.p.setTextColour(colors.white); m.p.write(msg:sub(i * (w - 3) + 1, (i + 1) * (w - 3))) end
+    end)
+  end
+  sleep(20)
+  error(crash, 0)
+end
 for _, m in ipairs(mons) do
   for i = 0, 15 do m.p.setPaletteColour(2 ^ i, term.nativePaletteColour(2 ^ i)) end
   m.p.setBackgroundColour(colors.black); m.p.clear()
