@@ -310,6 +310,7 @@ local function lost(name)                                -- our map is wrong: st
   unlock(name)
   if fs.exists(POSFILE) then fs.delete(POSFILE) end
   JOB.verified = nil; saveJob()
+  vert(lane(), true)                                       -- straight up out of the way (up is always open sky)
   print("I'M LOST - I thought I was at the " .. name .. " chest.")
   print("Pick me up, put me on top of the fuel chest, reboot.")
   while true do ping("LOST - pick me up, put me on the fuel chest and reboot", true); sleep(10) end
