@@ -119,6 +119,8 @@ take turns at the chests (the mine computer gives out the turns).
   `mining/mine_startup.lua` as `startup.lua`. It runs the same storage program as home (titled MINE) plus a
   "Turtles" tab with each turtle's status. Press **R** there to recall them all and **G** to send them back.
   On first boot it finds the drop-off chests and the fuel chest (the wooden chest holding only coal).
+- **Updating:** U on the mine computer's Turtles tab looks up the newest version on GitHub, hands it to every turtle
+  and restarts the mine computer too - new code is picked up right away (no 5-minute wait).
 - **Turtle numbers / groups:** turtle n works in group (n-1)%4+1, three to a chunk: 1 5 9 on chunk 1, 2 6 10 on chunk 2,
   3 7 11 on chunk 3, 4 8 12 on chunk 4 (13-16 would be a 4th per chunk). The mine computer keeps the plan
   (`mine_plan.txt`) and hands out one 3-block layer at a time, top to bottom, so turtles sharing a chunk never dig the

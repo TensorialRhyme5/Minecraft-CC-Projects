@@ -28,6 +28,48 @@ local CONF = {
     "minecraft:basalt", "minecraft:smooth_basalt", "minecraft:dripstone_block", "minecraft:end_stone",
   },
 }
+-- keep this turtle's startup.lua (the launcher) up to date: it fetches the newest version straight away
+local LOADER = [==[
+-- MINER launcher: grabs the newest miner.lua from GitHub, then runs it (install as "startup.lua").
+-- It asks GitHub for the newest version's id first, so a fresh push is picked up right away
+-- (the plain link can be up to 5 minutes behind). Falls back to the plain link if that fails.
+local REPO = "TensorialRhyme5/Minecraft-CC-Projects"
+local function newest()
+  if fs.exists("update_sha.txt") then                        -- handed to us by the mine computer (U key)
+    local f = fs.open("update_sha.txt", "r"); local sha = f.readAll() or ""; f.close()
+    fs.delete("update_sha.txt")
+    sha = sha:match("^%x+")
+    if sha and #sha == 40 then return sha end
+  end
+  local h = http.get("https://api.github.com/repos/" .. REPO .. "/commits/main", { Accept = "application/vnd.github.sha" })
+  if h then
+    local sha = (h.readAll() or ""):match("^%x+"); h.close()
+    if sha and #sha == 40 then return sha end
+  end
+  return "main"
+end
+local ref = newest()
+local h = http.get("https://raw.githubusercontent.com/" .. REPO .. "/" .. ref .. "/mining/miner.lua" ..
+  (ref == "main" and ("?t=" .. os.epoch("utc")) or ""))
+if h then
+  local code = h.readAll(); h.close()
+  if code and #code > 1000 and load(code, "miner") then
+    local f = fs.open("miner.lua", "w"); f.write(code); f.close()
+  end
+end
+while true do
+  if fs.exists("miner.lua") and shell.run("miner.lua") then break end
+  print("Miner stopped. Restarting in 5s (Ctrl+T to stop)...")
+  sleep(5)
+end
+]==]
+do
+  local cur = ""
+  if fs.exists("startup.lua") then local f = fs.open("startup.lua", "r"); cur = f.readAll() or ""; f.close() end
+  if cur ~= LOADER and cur:find("miner.lua", 1, true) then                -- (only replace our own launcher)
+    local f = fs.open("startup.lua", "w"); f.write(LOADER); f.close()
+  end
+end
 local PROTO = "minenet"
 local POSFILE, JOBFILE = "miner_pos.txt", "miner_job.txt"
 -- coal, charcoal and their blocks (any mod's) - but not coal ORE
@@ -729,6 +771,9 @@ local function listen()
     local _, m = rednet.receive(PROTO)
     if type(m) == "table" and m.t == "cmd" and (m.n == nil or m.n == info()) then
       if m.cmd == "reboot" then                                        -- U on the mine computer: update
+        if type(m.sha) == "string" and #m.sha == 40 then                -- the exact newest version to load
+          local f = fs.open("update_sha.txt", "w"); f.write(m.sha); f.close()
+        end
         if BUSY then REBOOT = true else os.reboot() end                -- (never in the middle of a move or turn)
       end
       CMD = m.cmd

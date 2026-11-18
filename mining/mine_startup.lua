@@ -1,8 +1,25 @@
 -- MINE COMPUTER launcher: the mine storage (same program as home) + the turtle base in a second tab.
 -- Install on the mine's Advanced Computer as "startup.lua". Updates itself from GitHub on every boot.
-local RAW = "https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/"
+local REPO = "TensorialRhyme5/Minecraft-CC-Projects"
+-- the newest version's id, so a fresh push is picked up right away (the plain link can lag 5 minutes)
+local function newest()
+  if fs.exists("update_sha.txt") then                        -- written by the Turtles tab (U key)
+    local f = fs.open("update_sha.txt", "r"); local sha = f.readAll() or ""; f.close()
+    fs.delete("update_sha.txt")
+    sha = sha:match("^%x+")
+    if sha and #sha == 40 then return sha end
+  end
+  local h = http.get("https://api.github.com/repos/" .. REPO .. "/commits/main", { Accept = "application/vnd.github.sha" })
+  if h then
+    local sha = (h.readAll() or ""):match("^%x+"); h.close()
+    if sha and #sha == 40 then return sha end
+  end
+  return "main"
+end
+local REF = newest()
+local RAW = "https://raw.githubusercontent.com/" .. REPO .. "/" .. REF .. "/"
 local function get(path, file)
-  local h = http.get(RAW .. path .. "?t=" .. os.epoch("utc"))
+  local h = http.get(RAW .. path .. (REF == "main" and ("?t=" .. os.epoch("utc")) or ""))
   if not h then return false end
   local code = h.readAll(); h.close()
   if not code or #code < 200 or not load(code, file) then return false end
