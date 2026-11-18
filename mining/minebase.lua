@@ -309,6 +309,15 @@ local function resort()
   moveOut(fe, cu, function(id) return isJunk[id] end)
 end
 
+-- long messages slide sideways so you can read all of them
+local function slide(s, w)
+  s = tostring(s or "")
+  if w < 1 then return "" end
+  if #s <= w then return s end
+  local loop = s .. "   " .. string.char(7) .. "   "
+  local off = math.floor(os.epoch("utc") / 250) % #loop
+  return (loop .. loop):sub(off + 1, off + w)
+end
 local function reply(to, msg, id) msg.re = id; rednet.send(to, msg, PROTO) end
 local function handle(from, m)
   if type(m) ~= "table" then return end
@@ -430,13 +439,13 @@ local function draw()
     local tag = (n < 10 and " " or "") .. n .. " "
     term.setTextColour(age > 60 and colors.red or colors.lime)
     if two then
-      print(tag .. tostring(t.state):sub(1, w - #tag))
+      print(tag .. slide(t.state, w - #tag))
       term.setTextColour(colors.lightGray)
       print("     y " .. tostring(t.y) .. "  fuel " .. tostring(t.fuel) .. "  free slots " .. tostring(t.free) ..
         (age > 60 and ("  (silent " .. math.floor(age) .. "s)") or ""))
     else
       local tail = " y" .. tostring(t.y) .. " f" .. tostring(t.fuel)
-      write(tag .. tostring(t.state):sub(1, w - #tag - #tail - 1))
+      write(tag .. slide(t.state, w - #tag - #tail - 1))
       term.setTextColour(colors.lightGray)
       local _, cy = term.getCursorPos()
       term.setCursorPos(w - #tail + 1, cy); print(tail)
@@ -495,7 +504,7 @@ end
 local function screen()
   while true do
     recount(); pcall(resort); draw()
-    local t = os.startTimer(1)
+    local t = os.startTimer(0.25)                                       -- (quick, so long messages slide smoothly)
     repeat
       local ev, p = os.pullEvent()
       if (ev == "char" or ev == "key") and view then view = nil; typed = ""; draw()

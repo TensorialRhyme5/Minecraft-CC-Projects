@@ -95,6 +95,15 @@ local function present()
   for y = 1, H do term.setCursorPos(1, y); term.blit(table.concat(fbC[y]), table.concat(fbF[y]), table.concat(fbB[y])) end
 end
 local function fit(s, w) s = tostring(s or ""); if #s > w then return s:sub(1, math.max(1, w - 1)) .. "." end return s end
+-- long names slide sideways (like the home storage screen); short ones are left alone
+local function slide(s, w)
+  s = tostring(s or "")
+  if w < 1 then return "" end
+  if #s <= w then return s end
+  local loop = s .. "   " .. string.char(7) .. "   "
+  local off = math.floor(os.epoch("utc") / 200) % #loop
+  return (loop .. loop):sub(off + 1, off + w)
+end
 local function now() return os.epoch("utc") / 1000 end
 local function commas(n)
   local s = tostring(math.floor(n)); local r = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
@@ -266,7 +275,7 @@ local function drawItems()
     center(10, "your base with FTB Chunks", C.dim); center(12, "(it also needs an", C.dim); center(13, "ender modem)", C.dim)
   elseif UI.sel then
     local it = UI.sel
-    text(2, 4, fit(it.name, W - 2), C.accent)
+    text(2, 4, slide(it.name, W - 2), C.accent)
     text(2, 5, it.id:gsub("#.*$", ""), C.dim)
     text(2, 7, "In storage: ", C.dim); text(14, 7, commas(it.count), C.cyan)
     text(2, 9, "To:", C.accent)
@@ -300,7 +309,7 @@ local function drawItems()
       local bg = (r % 2 == 0) and C.bg or C.blue
       fill(1, y, W, y, bg)
       local n = short(it.count)
-      text(1, y, fit(it.name, W - #n - 2), it.close and C.dim or C.text, bg)
+      text(1, y, slide(it.name, W - #n - 2), it.close and C.dim or C.text, bg)
       text(W - #n + 1, y, n, C.cyan, bg)
       hit("it" .. r, 1, y, W, y, function() UI.sel = it end)
     end
@@ -386,8 +395,8 @@ local function drawSearch(t)
       musicSend({ cmd = "request", pl = e.pl, si = e.si })
       UI.mnote, UI.mnoteAt = "Queued: " .. e.title, t
     end)
-    text(2, y, fit(e.title, W - 2), C.text, bg)
-    text(2, y + 1, fit(e.artist, W - 2), C.dim, bg)
+    text(2, y, slide(e.title, W - 2), C.text, bg)
+    text(2, y + 1, slide(e.artist, W - 2), C.dim, bg)
   end
   if #res == 0 then center(9, q == "" and "type a song or artist" or "no songs match", C.dim) end
   local y = 7 + rows * 2 + 1
@@ -416,7 +425,7 @@ local function drawMusic(t)
         title = pad:sub(off + 1, off + W - 2)
       end
       text(2, 3, title, C.accent)
-      text(2, 4, fit(st.artist or "", W - 2), C.dim)
+      text(2, 4, slide(st.artist or "", W - 2), C.dim)
       text(2, 5, fit(st.names and st.curPl and st.names[st.curPl] or "", W - 2), C.purple)
     end
     local dur = st.dur or 0
@@ -612,8 +621,8 @@ local function drawControl()
       text(W - #word + 1, y, word, tc)
     else text(W - 10, y, "checking...", C.dim) end
     if p.sotd then                                         -- song of the day
-      text(1, H - 2, "\14", C.accent); text(3, H - 2, fit(p.sotd.title, W - 2), C.accent)
-      text(3, H - 1, fit(p.sotd.artist or "", W - 2), C.dim)
+      text(1, H - 2, "\14", C.accent); text(3, H - 2, slide(p.sotd.title, W - 2), C.accent)
+      text(3, H - 1, slide(p.sotd.artist or "", W - 2), C.dim)
     end
   else
     local list = p.players
@@ -629,7 +638,7 @@ local function drawControl()
         if i == rows and #list > rows then text(2, y + i - 1, "+" .. (#list - rows + 1) .. " more", C.dim)
         else
           text(2, y + i - 1, "\7", e.near and C.good or C.light)
-          text(4, y + i - 1, fit(e.name, W - 4), C.text)
+          text(4, y + i - 1, slide(e.name, W - 4), C.text)
         end
       end
     end
@@ -726,8 +735,8 @@ do
         for i, it in ipairs(t.inv) do
           if y + i > H - 3 then break end
           local n = short(it.c)
-          text(1, y + i, fit(pretty(it.id), W - #n - 2), C.text, (i % 2 == 0) and C.bg or C.blue)
-          fill(#fit(pretty(it.id), W - #n - 2) + 1, y + i, W, y + i, (i % 2 == 0) and C.bg or C.blue)
+          text(1, y + i, slide(pretty(it.id), W - #n - 2), C.text, (i % 2 == 0) and C.bg or C.blue)
+          fill(#slide(pretty(it.id), W - #n - 2) + 1, y + i, W, y + i, (i % 2 == 0) and C.bg or C.blue)
           text(W - #n + 1, y + i, n, C.cyan, (i % 2 == 0) and C.bg or C.blue)
         end
       end
@@ -748,12 +757,12 @@ do
       local tag = tostring(n) .. (t.helper and "b" or "")
       text(1, yy, tag, C.accent)
       if two then
-        text(#tag + 2, yy, fit(t.state or "?", W - #tag - 1), col)
+        text(#tag + 2, yy, slide(t.state or "?", W - #tag - 1), col)
         text(#tag + 2, yy + 1, fit("y" .. tostring(t.y) .. " fuel " .. tostring(t.fuel) .. " free " .. tostring(t.free) ..
           (age > 60 and (" (" .. math.floor(age) .. "s)") or ""), W - #tag - 1), C.dim)
       else
         local tail = " y" .. tostring(t.y)
-        text(#tag + 2, yy, fit(t.state or "?", W - #tag - 1 - #tail), col)
+        text(#tag + 2, yy, slide(t.state or "?", W - #tag - 1 - #tail), col)
         text(W - #tail + 1, yy, tail, C.dim)
       end
       hit("mt" .. n, 1, yy, W, yy + (two and 1 or 0), function() MINE.tsel = n end)
@@ -777,7 +786,7 @@ do
     if not MINE.id then center(6, "Looking for the mine...", C.dim); center(8, "It needs an ender modem", C.dim); return end
     if MINE.sel then
       local it = MINE.sel
-      text(2, 4, fit(it.name, W - 2), C.accent)
+      text(2, 4, slide(it.name, W - 2), C.accent)
       text(2, 6, "In the mine: ", C.dim); text(15, 6, commas(it.count), C.cyan)
       local amounts = { { "1", 1 }, { "16", 16 }, { "64", 64 }, { "ALL", math.huge } }
       text(2, 8, "Send HOME:", C.dim)
@@ -806,7 +815,7 @@ do
         local bg = (r % 2 == 0) and C.bg or C.blue
         fill(1, y, W, y, bg)
         local n = short(it.count)
-        text(1, y, fit(it.name, W - #n - 2), C.text, bg); text(W - #n + 1, y, n, C.cyan, bg)
+        text(1, y, slide(it.name, W - #n - 2), C.text, bg); text(W - #n + 1, y, n, C.cyan, bg)
         hit("mi" .. r, 1, y, W, y, function() MINE.sel = it end)
       end
       local y = H - 3
