@@ -324,7 +324,15 @@ local function handle(from, m)
   local n = tonumber(m.n)
   if m.t == "status" and n then
     turtles[n] = m; m.at = os.clock(); m.from = from
-    for _, l in pairs(locks) do if l.n == n then l.at = os.clock() end end   -- still alive: keep its turn
+    -- a turtle keeps its chest turn only while it's actually at the chests (up above the base);
+    -- if it reports from anywhere else, its "done" message got lost: free the turn
+    for d, l in pairs(locks) do
+      if l.n == n then
+        local x, y, z = tonumber(m.x), tonumber(m.y), tonumber(m.z)
+        local atChests = x and y and z and x >= -100 and x <= -82 and z >= -2256 and z <= -2241 and y >= 250
+        if atChests then l.at = os.clock() else locks[d] = nil end
+      end
+    end
     local p = tonumber(m.chunk) and PLAN[tonumber(m.chunk)]                  -- still alive: keep its layer
     local cl = p and p.claim and m.layer and p.claim[m.layer]
     if cl and cl.n == n then cl.at = os.epoch("utc") end

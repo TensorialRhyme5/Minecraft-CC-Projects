@@ -362,7 +362,10 @@ local function lock(name)
     sleep(2)
   end
 end
-local function unlock(name) if modem then pcall(rednet.broadcast, { t = "unlock", n = info(), dock = name }, PROTO) end end
+local function unlock(name)                              -- (said twice: a lost one would leave the chest "taken")
+  if not modem then return end
+  for _ = 1, 2 do pcall(rednet.broadcast, { t = "unlock", n = info(), dock = name }, PROTO) end
+end
 local function lost(name)                                -- our map is wrong: stop before we do damage
   unlock(name)
   if fs.exists(POSFILE) then fs.delete(POSFILE) end
