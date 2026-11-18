@@ -315,14 +315,43 @@ local function lost(name)                                -- our map is wrong: st
   print("Pick me up, put me on top of the fuel chest, reboot.")
   while true do ping("LOST - pick me up, put me on the fuel chest and reboot", true); sleep(10) end
 end
+-- never wait for a turn inside a chest's column (the turtle whose turn it is would land on us)
+local function inAColumn()
+  for _, c in ipairs({ CONF.fuelChest, CONF.drops[1], CONF.drops[2] }) do
+    if P.x == c.x and P.z == c.z then return true end
+  end
+  return false
+end
+local function offColumns()
+  for _ = 1, 20 do
+    if not inAColumn() then return true end
+    for f = 0, 3 do                                    -- one block sideways, any free way that isn't another column
+      local nx, nz = P.x + DX[f + 1], P.z + DZ[f + 1]
+      local bad = false
+      for _, c in ipairs({ CONF.fuelChest, CONF.drops[1], CONF.drops[2] }) do if nx == c.x and nz == c.z then bad = true end end
+      if not bad then face(f); if step("fwd", true, 3) then break end end
+    end
+    if inAColumn() then sleep(2); step("up", true, 3) end
+  end
+  return not inAColumn()
+end
+local function outOfFuel()                             -- too little to keep trying: stay put and ask for help
+  while turtle.getFuelLevel() < 100 do
+    burnCarried(500)
+    if turtle.getFuelLevel() >= 100 then break end
+    ping("OUT OF FUEL - put coal in me", true); sleep(15)
+  end
+end
 -- quick: give up (return false) as soon as a stuck turtle blocks this chest, so we can use another one
 local function useDock(name, chest, fn, quick)
   local L = lane()
   for _ = 1, 1000 do
     if not vert(L) then return false end
+    outOfFuel()
     STEP_PAT = 30
     goTo(chest.x + 3, L, chest.z)                                         -- wait beside the column (or near it,
     STEP_PAT = nil                                                        --  if a stuck turtle is in that spot)
+    offColumns()
     lock(name)
     BLOCKER = nil
     STEP_PAT = 15
@@ -343,6 +372,7 @@ local function useDock(name, chest, fn, quick)
     unlock(name)
     if there then return true end
     STEP_PAT = 30; goTo(chest.x + 3, L, chest.z); STEP_PAT = nil       -- something was in the way: try again
+    offColumns()
     if BLOCKER and quick then
       ping("a stuck turtle is above the " .. name .. " chest at " .. BLOCKER .. " - remove it", true)
       return false, "blocked"
@@ -414,6 +444,16 @@ local function dockRun(why)
   ping(why or "heading home", true)
   if inQ(P.x, P.z) then tidy(); horiz("z", S.z); horiz("x", S.x) end    -- back along rows already dug
   vert(lane())
+  local function refuel()
+    while not useDock("fuel", CONF.fuelChest, fuelStop, true) do
+      -- fuel chest blocked by a stuck turtle: carry on if we have plenty, otherwise wait for it to be removed
+      if turtle.getFuelLevel() > costHome() + 2 * (lane() - CONF.bands[#CONF.bands].bottom) + 300 then break end
+      ping("the fuel chest is blocked by a stuck turtle - remove it (" .. tostring(BLOCKER) .. ")", true)
+      sleep(60)
+    end
+  end
+  local fueled = false
+  if turtle.getFuelLevel() < 800 then refuel(); fueled = true end      -- nearly empty: fuel first
   local a = dropNo()
   while not (useDock("drop" .. a, CONF.drops[a], dropAll, true) or
              useDock("drop" .. (3 - a), CONF.drops[3 - a], dropAll, true)) do   -- blocked: use the other one
@@ -421,12 +461,7 @@ local function dockRun(why)
     sleep(60)
   end
   updateNeeds()
-  while not useDock("fuel", CONF.fuelChest, fuelStop, true) do
-    -- fuel chest blocked by a stuck turtle: carry on if we have plenty, otherwise wait for it to be removed
-    if turtle.getFuelLevel() > costHome() + 2 * (lane() - CONF.bands[#CONF.bands].bottom) + 300 then break end
-    ping("the fuel chest is blocked by a stuck turtle - remove it (" .. tostring(BLOCKER) .. ")", true)
-    sleep(60)
-  end
+  if not fueled then refuel() end
 end
 local function park(final)
   local d = dropDock()
