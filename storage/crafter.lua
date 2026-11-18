@@ -109,9 +109,12 @@ end
 
 -- fill grid slots from whatever is sitting in the spare slots
 local function distribute(cells, k)
+  -- plain copies first; a copy with extra data (an Advanced Mining Turtle, a renamed tool) only if
+  -- nothing plain is there - the game won't upgrade a turtle that's already upgraded
+  for pass = 1, 2 do
   for _, st in ipairs(STAGE) do
     local d = turtle.getItemDetail(st)
-    if d then
+    if d and ((pass == 1) == (d.nbt == nil)) then
       for s, name in pairs(cells) do
         if name == d.name and turtle.getItemCount(st) > 0 then
           local have = turtle.getItemCount(s)
@@ -122,6 +125,7 @@ local function distribute(cells, k)
         end
       end
     end
+  end
   end
 end
 

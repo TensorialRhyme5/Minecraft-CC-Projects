@@ -423,10 +423,13 @@ local function loadRecipes()
   for o in pairs(byOut) do outs[#outs + 1] = o end
   table.sort(outs, function(a, b) return name[a] < name[b] end)
   -- recipes the game turned down before (a modpack can remove or change them) are left out for good
+  R.dropped = {}
   if data.badRc then
     for o, l in pairs(byOut) do
       for j = #l, 1, -1 do
-        if data.badRc[id[o] .. "|" .. l[j].k .. "|" .. tostring(l[j].g)] then table.remove(l, j) end
+        if data.badRc[id[o] .. "|" .. l[j].k .. "|" .. tostring(l[j].g)] then
+          R.dropped[o] = R.dropped[o] or {}; table.insert(R.dropped[o], l[j]); table.remove(l, j)
+        end
       end
     end
   end
@@ -2051,6 +2054,9 @@ function R.dropRecipe(out, rc)
   rc.bad = true
   local l = R.byOut[out] or {}
   for j = #l, 1, -1 do if l[j] == rc then table.remove(l, j) end end
+  R.dropped = R.dropped or {}
+  R.dropped[out] = R.dropped[out] or {}
+  table.insert(R.dropped[out], rc)
   R.ready = {}
   for k in pairs(shortMemo) do shortMemo[k] = nil end
   if UI.rsel == out then UI.rlist = rankRecipes(out); UI.rvar = 1 end
@@ -2720,6 +2726,28 @@ local function drawRecipe()
   if UI.rvar > #list then UI.rvar = 1 end
   local rc = list[UI.rvar]
   fill(RX1 - 1, 5, RX2, H, PANEL)
+  if not rc then                                         -- every recipe for it was turned down by the game
+    text(RX1, 6, fit(R.name[o] or "?", 38), YELLOW, PANEL)
+    text(RX1, 9, "No recipe to use right now:", LGRAY, PANEL)
+    text(RX1, 10, "the game turned it down last time.", LGRAY, PANEL)
+    local back = R.dropped and R.dropped[o]
+    if back and #back > 0 then
+      text(RX1, 12, "If it was a one-off (wrong item in", GRAY, PANEL)
+      text(RX1, 13, "the barrel), try it again:", GRAY, PANEL)
+      button("rcretry", RX1, 15, RX2, 17, "TRY AGAIN", BLACK, LIME, function()
+        for _, r in ipairs(back) do
+          r.bad = nil
+          table.insert(R.byOut[o], r)
+          if data.badRc then data.badRc[R.id[o] .. "|" .. r.k .. "|" .. tostring(r.g)] = nil end
+        end
+        R.dropped[o] = nil; save(); R.ready = {}
+        UI.rlist = rankRecipes(o); UI.rvar = 1
+        setStatus("Brought back the " .. R.name[o] .. " recipe", LIME)
+      end)
+    end
+    button("rclose", RX1, H - 3, RX2, H - 1, "CLOSE", WHITE, RED, function() UI.rsel = nil end)
+    return
+  end
   local hasBack = UI.rhist and #UI.rhist > 0
   text(RX1, 6, fit(R.name[o], hasBack and 30 or 38), YELLOW, PANEL)
   if hasBack then
