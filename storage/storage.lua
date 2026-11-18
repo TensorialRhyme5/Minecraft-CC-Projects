@@ -1412,6 +1412,26 @@ function R.famOf(ns)
   if ns:find("^create_") then return "create" end
   return ns
 end
+function R.modWord(q)                               -- "create" -> { create = true, (its add-ons) }
+  if #q < 4 or q:find("%s") then return nil end
+  if not R.modList and R.id and R.realMod then                 -- every installed mod id, once
+    local seen = {}
+    R.modList = {}
+    for _, i in ipairs(R.id) do local ns = R.modOf(i); if not seen[ns] and R.realMod(ns) then seen[ns] = true; R.modList[#R.modList + 1] = ns end end
+  end
+  local hit
+  for _, ns in ipairs(R.modList or {}) do
+    local nm = R.modName(ns):lower()
+    if ns == q or ns:sub(1, #q) == q or nm:sub(1, #q) == q then hit = hit or {}; hit[ns] = true end
+  end
+  if hit then for ns in pairs(hit) do if R.FAMILY[ns] then hit["@fam:" .. ns] = true end end end
+  return hit
+end
+function R.inModWord(hit, id)
+  if not hit then return false end
+  local ns = R.modOf(id)
+  return hit[ns] or hit["@fam:" .. R.famOf(ns)] or false
+end
 function R.modFilter(q)
   local at = q:match("@(%S*)")
   if at then q = q:gsub("@%S*", ""):gsub("^%s+", ""):gsub("%s+$", "") end
@@ -1431,9 +1451,10 @@ local function rebuildList(quick)
   local wantFuzzy = #q >= 3 and not quick
   if UI.mode == "recipes" then
     if R.state ~= "ready" then return end
+    R.mwR = q ~= "" and R.modWord(q) or nil
     local only = UI.canMake and R.canSet
     for j, o in ipairs(R.outs) do
-      if (q == "" or R.lower[j]:find(q, 1, true) or (#qs >= 3 and R.lns[j]:find(qs, 1, true)))
+      if (q == "" or R.lower[j]:find(q, 1, true) or (#qs >= 3 and R.lns[j]:find(qs, 1, true)) or R.inModWord(R.mwR, R.id[o]))
          and (not UI.canMake or (only and only[o])) and modOk(R.id[o]) and R.realMod(R.modOf(R.id[o])) then
         local nm = R.name[o]
         local l = nm:lower():gsub(" %(.*%)$", "")
@@ -1469,11 +1490,14 @@ local function rebuildList(quick)
     if UI.fuzzy and items[1] and items[1].rank >= 3 then UI.didYouMean = items[1].name:gsub(" %(.*%)$", "") end
     return
   end
+  local mw = q ~= "" and R.modWord(q)
   for id, it in pairs(index) do
     local name = data.names[id] or prettyId(id)
     if modOk(id) and (q == "" or name:lower():find(q, 1, true) or id:lower():find(q, 1, true)
        or (#qs >= 3 and name:lower():gsub("%s+", ""):find(qs, 1, true))) then
       items[#items + 1] = { id = id, name = name, count = it.count }
+    elseif modOk(id) and R.inModWord(mw, id) then
+      items[#items + 1] = { id = id, name = name, count = it.count, bymod = true }
     end
   end
   local qw = queryWords(q)
@@ -1495,14 +1519,18 @@ local function rebuildList(quick)
       return a.count > b.count
     end)
     if #close > 0 then UI.fuzzy = true; if #items == 0 then UI.didYouMean = close[1].name end end
-    table.sort(items, function(a, b) if a.count ~= b.count then return a.count > b.count end return a.name < b.name end)
+    table.sort(items, function(a, b)
+      if (a.bymod or false) ~= (b.bymod or false) then return not a.bymod end   -- name matches first, then "that mod"
+      if a.count ~= b.count then return a.count > b.count end return a.name < b.name end)
     for _, c in ipairs(close) do items[#items + 1] = c end
     return                                         -- exact hits first, then closest typos
   end
   if data.sort == "name" then
     table.sort(items, function(a, b) return a.name:lower() < b.name:lower() end)
   else
-    table.sort(items, function(a, b) if a.count ~= b.count then return a.count > b.count end return a.name < b.name end)
+    table.sort(items, function(a, b)
+      if (a.bymod or false) ~= (b.bymod or false) then return not a.bymod end   -- name matches first, then "that mod"
+      if a.count ~= b.count then return a.count > b.count end return a.name < b.name end)
   end
 end
 
