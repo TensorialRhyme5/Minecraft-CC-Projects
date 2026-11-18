@@ -132,7 +132,7 @@ local function fit(s, w) if #s > w then return s:sub(1, math.max(1, w - 1)) .. "
 -- ---------------------------------------------------------- saved settings (alerts + item names)
 local SAVE = "storage_data.txt"
 local data = { alerts = {}, names = {}, sort = "count", remotes = {}, smeltRule = {}, dbl = {}, woodOf = {},
-  smeltStop = false, smeltHeld = {} }
+  smeltStop = false, smeltHeld = {}, okVar = {} }
 if fs.exists(SAVE) then
   local f = fs.open(SAVE, "r")
   local ok, d = pcall(textutils.unserialize, f.readAll())
@@ -149,6 +149,7 @@ if fs.exists(SAVE) then
     data.smeltStop = d.smeltStop == true
     data.smeltHeld = type(d.smeltHeld) == "table" and d.smeltHeld or {}
     data.badRc = type(d.badRc) == "table" and d.badRc or nil              -- recipes the game turned down
+    data.okVar = type(d.okVar) == "table" and d.okVar or {}               -- unusual copies that are fine to craft with
     for id, nm in pairs(data.names) do data.names[id] = betterName(id, nm) end   -- e.g. "Smithing Template (Netherite Upgrade)"
   end
 end
@@ -384,6 +385,37 @@ local function loadRecipes()
   for j = 1, ni do seenName[name[j]] = (seenName[name[j]] or 0) + 1 end
   for j = 1, ni do
     if seenName[name[j]] > 1 then name[j] = name[j] .. " (" .. (id[j]:match("^([^:]+)") or "?") .. ")" end
+  end
+  -- "Turtle + Diamond Pickaxe -> Turtle" is really a Mining Turtle: recipes that use their own output
+  -- become their own item (id@mining), so nothing loops and you can pick the one you want
+  do
+    local UPG = { diamond_pickaxe = "Mining", diamond_axe = "Felling", diamond_shovel = "Digging", diamond_hoe = "Farming",
+      diamond_sword = "Melee", crafting_table = "Crafty", wireless_modem_normal = "Wireless", wireless_modem_advanced = "Ender",
+      speaker = "Musical" }
+    local adds = {}
+    for o, l in pairs(byOut) do
+      for j = #l, 1, -1 do
+        local selfRef, other = false, nil
+        for gs in tostring(l[j].g):gmatch("[^,]+") do
+          local g = tonumber(gs)
+          local single = g and g > 0 and tostring(grpRaw[g] or ""):match("^(%d+)$")
+          if single and tonumber(single) == o then selfRef = true
+          elseif single and not other then other = id[tonumber(single)] end
+        end
+        if selfRef then adds[#adds + 1] = { o = o, rc = l[j], other = other }; table.remove(l, j) end
+      end
+    end
+    for _, a in ipairs(adds) do
+      local on = tostring(a.other or ""):match(":(.+)$") or "upgrade"
+      local adj = UPG[on]
+      local nm = adj and (adj .. " " .. name[a.o]) or (on == "stick" and (name[a.o] .. " (flag)"))
+        or (name[a.o] .. " + " .. ((a.other and byId[a.other] and name[byId[a.other]]) or on))
+      local pid = id[a.o] .. "@" .. (adj and adj:lower() or on)
+      local n = byId[pid]
+      if not n then ni = ni + 1; n = ni; id[n] = pid; name[n] = nm; byId[pid] = n end
+      byOut[n] = byOut[n] or {}
+      table.insert(byOut[n], a.rc)
+    end
   end
   local outs = {}
   for o in pairs(byOut) do outs[#outs + 1] = o end
@@ -1644,12 +1676,14 @@ local function scan()
       e.count = e.count + it.count
       local loc = { inv = name, slot = slot, count = it.count, plain = key == it.name }
       e.locs[#e.locs + 1] = loc
-      local b = newByName[SM.groupKey(it)]
-      if not b then
-        b = { id = SM.groupKey(it), name = SM.groupKey(it), count = 0, locs = {} }; newByName[b.id] = b
+      if key == it.name or data.okVar[key] then                 -- damaged / enchanted / upgraded copies stay out of recipes
+        local b = newByName[SM.groupKey(it)]
+        if not b then
+          b = { id = SM.groupKey(it), name = SM.groupKey(it), count = 0, locs = {} }; newByName[b.id] = b
+        end
+        b.count = b.count + it.count
+        b.locs[#b.locs + 1] = loc
       end
-      b.count = b.count + it.count
-      b.locs[#b.locs + 1] = loc
     end
   end
   for ck in pairs(variantCache) do if not seen[ck] then variantCache[ck] = nil end end
@@ -1690,11 +1724,19 @@ SM.rescan = scan
 local function resolveNames(limit)
   local done = 0
   for id, e in pairs(index) do
-    if not data.names[id] and e.locs[1] then
+    if (not data.names[id] or (id ~= e.name and data.okVar[id] == nil)) and e.locs[1] then
       local l = e.locs[1]
       local ok, d = pcall(peripheral.call, l.inv, "getItemDetail", l.slot)
       if ok and type(d) == "table" and d.displayName then
-        data.names[id] = (id ~= e.name) and variantLabel(d) or betterName(id, clean(d.displayName)); dirty = true
+        if not data.names[id] then data.names[id] = (id ~= e.name) and variantLabel(d) or betterName(id, clean(d.displayName)) end
+        if id ~= e.name then
+          -- a copy with extra data: only craft with it if it's not damaged, enchanted or something else
+          -- entirely (a Mining Turtle is not a plain Turtle)
+          local plainName = data.names[e.name] or (R.byId and R.byId[e.name] and R.name[R.byId[e.name]])
+          local same = not plainName or clean(d.displayName) == plainName
+          data.okVar[id] = (tonumber(d.damage) or 0) <= 0 and #enchList(d) == 0 and same
+        end
+        dirty = true
       else
         data.names[id] = prettyId(e.name or id); dirty = true
       end
@@ -2037,6 +2079,7 @@ end
 SM.returnToStorage = pickupToStorage
 
 local function chainCraft(t)
+  if not t.rc then return 0, "no recipe that can be made right now" end
   scan()
   local steps
   for d = 1, CHAIN_DEPTH do
@@ -3325,7 +3368,8 @@ local function worker()
         if not okc then made, err = 0, tostring(made) end
         busy = nil
         SM.learnDouble(R.id[t.out], currentPickup())
-        local nextRc = t.rc.bad and R.byOut[t.out] and R.byOut[t.out][1] or (not t.rc.bad and t.rc)
+        local rc0 = t.rc or {}
+        local nextRc = rc0.bad and R.byOut[t.out] and R.byOut[t.out][1] or (t.rc and not rc0.bad and t.rc)
         local rejected = err and err:find("rejected the recipe", 1, true)
         if err and (t.retried or 0) < (rejected and 3 or 1) and nextRc and made < t.crafts and (rejected or
            err:find("couldn't take enough", 1, true) or err:find("ran out of", 1, true)) then
