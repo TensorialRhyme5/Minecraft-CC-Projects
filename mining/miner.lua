@@ -87,6 +87,7 @@ local function ask(msg, timeout)
     if type(r) == "table" and r.re == msg.id then return r end
   end
 end
+local LASTFAIL                                  -- what stopped our last move, and where
 local BUSY, REBOOT = false, false               -- moving/turning right now / restart as soon as that's done
 local HARD = false                             -- did the last trip run into a block we can't break?
 local function note(name)
@@ -132,17 +133,17 @@ local function step(dir, noDig, patience)
     tries = tries + 1
     local ok, d = INS[dir]()
     if ok and type(d) == "table" and type(d.name) == "string" and d.name:find("turtle", 1, true) then
-      if tries > (patience or 400) then return false, "turtle" end    -- another turtle: wait for it to pass
+      if tries > (patience or 400) then LASTFAIL = "turtle at " .. tx .. " " .. ty .. " " .. tz; return false, "turtle" end
       ping("waiting for another turtle"); sleep(0.4 + math.random())
     elseif ok then
-      if noDig or protected(tx, ty, tz) then return false, "blocked" end
+      if noDig or protected(tx, ty, tz) then LASTFAIL = tostring(d and d.name):gsub("^minecraft:", "") .. " at " .. tx .. " " .. ty .. " " .. tz; return false, "blocked" end
       if not DIG[dir]() then
         if INS[dir]() then return false, "unbreakable", d.name end  -- too hard for a diamond pickaxe
       end
     else
-      if turtle.getFuelLevel() == 0 then return false, "fuel" end
+      if turtle.getFuelLevel() == 0 then LASTFAIL = "no fuel"; return false, "fuel" end
       ATK[dir]()                                                     -- a mob, or a block still falling
-      if tries > 40 then return false, "stuck" end
+      if tries > 40 then LASTFAIL = "mob/player? at " .. tx .. " " .. ty .. " " .. tz; return false, "stuck" end
       sleep(0.2)
     end
   end
@@ -173,7 +174,7 @@ local function vert(ty, noDig, maxBack)
     if not ok and why == "turtle" and down then
       backoffs = backoffs + 1
       if backoffs > (maxBack or 60) then                              -- (a turtle that never moves: out of fuel / broken)
-        BLOCKER = P.x .. " " .. (P.y - 1) .. " " .. P.z
+        BLOCKER = "turtle at " .. P.x .. " " .. (P.y - 1) .. " " .. P.z
         return false, "turtle"
       end
       if turtle.getFuelLevel() > 200 then step("up", noDig, 4) end
@@ -365,14 +366,15 @@ local function useDock(name, chest, fn, quick)
     STEP_PAT = nil                                                        --  if a stuck turtle is in that spot)
     offColumns()
     lock(name)
-    BLOCKER = nil
+    BLOCKER, LASTFAIL = nil, nil
     STEP_PAT = 15
     local okH = goTo(chest.x, L, chest.z)
     STEP_PAT = nil
     if not okH and P.x ~= chest.x then                                    -- a turtle that won't move, right in our way
-      BLOCKER = (P.x + DX[P.f + 1]) .. " " .. P.y .. " " .. (P.z + DZ[P.f + 1])
+      BLOCKER = "turtle at " .. (P.x + DX[P.f + 1]) .. " " .. P.y .. " " .. (P.z + DZ[P.f + 1])
     end
     if okH then vert(chest.y + 1, true, 10) end
+    if not (P.x == chest.x and P.z == chest.z and P.y == chest.y + 1) and LASTFAIL then BLOCKER = BLOCKER or LASTFAIL end
     local there = P.x == chest.x and P.z == chest.z and P.y == chest.y + 1
     local okI, d = turtle.inspectDown()
     local below = okI and type(d) == "table" and tostring(d.name) or nil
@@ -386,13 +388,13 @@ local function useDock(name, chest, fn, quick)
     STEP_PAT = 30; goTo(chest.x + 3, L, chest.z); STEP_PAT = nil       -- something was in the way: try again
     offColumns()
     if BLOCKER and quick then
-      ping("a stuck turtle is above the " .. name .. " chest at " .. BLOCKER .. " - remove it", true)
+      ping(name .. " blocked: " .. BLOCKER, true)
       return false, "blocked"
     elseif BLOCKER then
-      ping("a stuck turtle is above the " .. name .. " chest at " .. BLOCKER .. " - remove it", true)
+      ping(name .. " blocked: " .. BLOCKER, true)
       sleep(30 + math.random() * 30)                                     -- let the others have a go meanwhile
     else
-      ping("couldn't get onto the " .. name .. " chest - trying again", true)
+      ping("couldn't get onto " .. name .. " (" .. tostring(LASTFAIL or "?") .. ")", true)
       sleep(5 + math.random() * 10)
     end
   end
