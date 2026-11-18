@@ -1361,7 +1361,7 @@ local function rebuildList(quick)
     local only = UI.canMake and R.canSet
     for j, o in ipairs(R.outs) do
       if (q == "" or R.lower[j]:find(q, 1, true) or (#qs >= 3 and R.lns[j]:find(qs, 1, true)))
-         and (not UI.canMake or (only and only[o])) and modOk(R.id[o]) then
+         and (not UI.canMake or (only and only[o])) and modOk(R.id[o]) and R.realMod(R.modOf(R.id[o])) then
         local nm = R.name[o]
         local l = nm:lower():gsub(" %(.*%)$", "")
         local ls = R.lns[j]
@@ -2894,13 +2894,93 @@ do
 end
 
 -- MOD picker: every mod you have items (or recipes) from, biggest first
-function R.modName(ns)
-  local nice = { minecraft = "Minecraft", create = "Create", mekanism = "Mekanism", ae2 = "AE2", allthemodium = "Allthemodium",
-    sophisticatedstorage = "Soph. Storage", sophisticatedbackpacks = "Soph. Backpacks", cobblemon = "Cobblemon",
-    immersiveengineering = "Immersive Eng.", industrialforegoing = "Industrial Foregoing", mysticalagriculture = "Mystical Agri" }
-  if nice[ns] then return nice[ns] end
-  return (ns:gsub("_", " "):gsub("^%l", string.upper))
+-- real mod names (the ids items use are often shortened or different)
+R.NOT_INSTALLED = {}
+for _, ns in ipairs({ "refinedstorage", "techreborn", "modern_industrialization", "quark", "minecolonies", "structurize", "caverns_and_chasms", "spelunkery", "friendsandfoes", "etched", "chalk", "mcdw", "pickletweaks", "queen_bee", "quarryplus", "create_high_seas" }) do R.NOT_INSTALLED[ns] = true end
+do
+  local nice = {
+    actuallyadditions = "Actually Additions", additional_lights = "Additional Lights", advanced_ae = "Advanced AE",
+    advancedperipherals = "Advanced Peripherals", ae2 = "Applied Energistics 2",
+    ae2importexportcard = "AE2 Import Export Card", ae2netanalyser = "AE2 Network Analyzer",
+    ae2wtlib = "AE2 Wireless Terminals", aeinfinitybooster = "AE Infinity Booster", aeronautics = "Create Aeronautics",
+    aeronautics_utility_objects = "Aeronautics Utility", aether = "The Aether", akashictome = "Akashic Tome",
+    allthearcanistgear = "All The Arcanist Gear", allthecompressed = "All The Compressed",
+    allthemodium = "Allthemodium", allthemons = "All The Mons", alltheores = "All The Ores",
+    allthetweaks = "All The Tweaks", amendments = "Amendments", apokinetics = "Apokinetics", apotheosis = "Apotheosis",
+    apothic_enchanting = "Apothic Enchanting", appflux = "Applied Flux", appmek = "Applied Mekanistics",
+    aquaculture = "Aquaculture 2", ars_additions = "Ars Additions", ars_controle = "Ars Controle",
+    ars_creo = "Ars Creo", ars_elemental = "Ars Elemental", ars_nouveau = "Ars Nouveau", ars_technica = "Ars Technica",
+    arseng = "Ars Energistique", artifacts = "Artifacts", bellsandwhistles = "Create: Bells & Whistles",
+    berrypouch = "Berry Pouch", bhc = "Baubley Heart Canisters", bigreactors = "Extreme Reactors",
+    botanypots = "Botany Pots", buildinggadgets2 = "Building Gadgets 2", camerapture = "Camerapture", camol = "Camol",
+    cataclysm = "L_Ender's Cataclysm", charginggadgets = "Charging Gadgets", chipped = "Chipped", chisel = "Chisel",
+    chromacarvings = "Chroma Carvings", cloudglass = "Cloud Glass", cobblefurnies = "Cobble Furnies",
+    cobblegengalore = "Cobble Gen Galore", cobblemon = "Cobblemon", cobblemon_battle_tower = "Cobblemon Battle Tower",
+    cobblemon_utility = "Cobblemon Utility+", cobblemonstonestatues = "Cobblemon Stone Statues",
+    cobblenav = "CobbleNav", comforts = "Comforts", compactmachines = "Compact Machines", computercraft = "CC: Tweaked",
+    connectedglass = "Connected Glass", constructionstick = "Construction Sticks",
+    cookingforblockheads = "Cooking for Blockheads", copycats = "Create: Copycats+",
+    crafting_on_a_stick = "Crafting On A Stick", create = "Create",
+    create_aeronautics_throwable_rope_connector = "Aeronautics Rope Connector",
+    create_aquatic_ambitions = "Create: Aquatic Ambitions", create_connected = "Create: Connected",
+    create_dragons_plus = "Create: Dragons Plus", create_enchantment_industry = "Create: Enchantment Industry",
+    create_hypertube = "Create: Hypertube", create_submarine = "Create: Submarine",
+    createaddition = "Create Crafts & Additions", createmonballsoverhaul = "Create: Cobblemon Balls",
+    createpropulsion = "Create: Propulsion", crush_depth = "Crush Depth", crystalix = "Crystalix",
+    deeperdarker = "Deeper and Darker", dimstorage = "DimStorage", draconicevolution = "Draconic Evolution",
+    dummmmmmy = "MmmMmmMmmMmm", dyenamics = "Dyenamics", dyenamicsandfriends = "Dyenamics and Friends",
+    easy_villagers = "Easy Villagers", elevatorid = "Elevator Mod", enderio = "Ender IO",
+    endermanoverhaul = "Enderman Overhaul", eternal_starlight = "Eternal Starlight",
+    everythingcopper = "Everything Copper", expandedae = "Expanded AE", explorerscompass = "Explorer's Compass",
+    extendedae = "Extended AE", factory_blocks = "Factory Blocks", farmersdelight = "Farmer's Delight",
+    farmingforblockheads = "Farming for Blockheads", fightorflight = "Fight or Flight",
+    fireproofboats = "Fireproof Boats", fluxnetworks = "Flux Networks", forbidden_arcanus = "Forbidden & Arcanus",
+    framedblocks = "Framed Blocks", ftbfiltersystem = "FTB Filter System", functionalstorage = "Functional Storage",
+    gateways = "Gateways to Eternity", generatorgalore = "Generator Galore", glassential = "Glassential",
+    gmut = "G.M.U.T. (Gravitational Modulating)", gyro = "Aeronautics Gyroscopes", handcrafted = "Handcrafted",
+    hostilenetworks = "Hostile Neural Networks", immeng = "Immersive Energistics",
+    immersiveengineering = "Immersive Engineering", industrialforegoing = "Industrial Foregoing",
+    integratedcrafting = "Integrated Crafting", integrateddynamics = "Integrated Dynamics",
+    integratedscripting = "Integrated Scripting", integratedterminals = "Integrated Terminals",
+    integratedtunnels = "Integrated Tunnels", ironfurnaces = "Iron Furnaces", ironjetpacks = "Iron Jetpacks",
+    itemcollectors = "Item Collectors", justdirethings = "Just Dire Things", kubejs = "KubeJS (pack items)",
+    laserbridges = "Laser Bridges", laserio = "LaserIO", legendarymonuments = "Legendary Monuments",
+    little_big_redstone = "Little Big Redstone", logisticsnetworks = "Logistics Networks", luminax = "Luminax",
+    mega_showdown = "Mega Showdown", megacells = "MEGA Cells", mekanism = "Mekanism",
+    mekanismcovers = "Mekanism Covers", mekanismgenerators = "Mekanism Generators", mekanismtools = "Mekanism Tools",
+    mekanisticrouters = "Mekanistic Routers", mekmm = "Mekanism: More Machine", merequester = "ME Requester",
+    minecraft = "Minecraft", mininggadgets = "Mining Gadgets", mob_grinding_utils = "Mob Grinding Utils",
+    modonomicon = "Modonomicon", modularbees = "Modular Bees", modularrouters = "Modular Routers", morered = "More Red",
+    mysticalagradditions = "Mystical Agradditions", mysticalagriculture = "Mystical Agriculture",
+    naturesaura = "Nature's Aura", naturescompass = "Nature's Compass", occultism = "Occultism", oritech = "Oritech",
+    patchouli = "Patchouli", pipez = "Pipez", pkgbadges = "PKG Badges", pneumaticcraft = "PneumaticCraft",
+    pocketstorage = "Pocket Storage", potionsmaster = "Potions Master", powah = "Powah",
+    productivebees = "Productive Bees", productivefarming = "Productive Farming", productivelib = "Productive Lib",
+    productivemetalworks = "Productive Metalworks", productivetrees = "Productive Trees", pylons = "Pylons",
+    railcraft = "Railcraft Reborn", rangedpumps = "Ranged Pumps", rctmod = "Radical Cobblemon Trainers",
+    rechiseled = "Rechiseled", rechiseledcreate = "Rechiseled: Create", redstonepen = "Redstone Pen", relics = "Relics",
+    reliquary = "Reliquary", reliquified_artifacts = "Reliquified Artifacts", rftoolsbase = "RFTools Base",
+    rftoolsbuilder = "RFTools Builder", rftoolspower = "RFTools Power", rftoolsstorage = "RFTools Storage",
+    rftoolsutility = "RFTools Utility", rootsclassic = "Roots Classic", sauce = "Sable", sawmill = "Sawmill",
+    securitycraft = "SecurityCraft", sfm = "Super Factory Manager", sgearmetalworks = "Silent Gear Metalworks",
+    shrink = "Shrink", silentgear = "Silent Gear", silentgems = "Silent Gems", simplemagnets = "Simple Magnets",
+    simpletms = "Simple TMs", simplylight = "Simply Light", simulated = "Create Aeronautics (Simulated)",
+    solcarrot = "Spice of Life: Carrot", sophisticatedbackpacks = "Sophisticated Backpacks",
+    sophisticatedcore = "Sophisticated Core", sophisticatedstorage = "Sophisticated Storage",
+    sophisticatedstorageinmotion = "Sophisticated Storage in Motion", starbunclemania = "Starbuncle Mania",
+    stevescarts = "Steve's Carts", supplementaries = "Supplementaries", tempad = "Tempad",
+    the_bumblezone = "The Bumblezone", theurgy = "Theurgy", tiab = "Time in a Bottle", torchmaster = "Torchmaster",
+    trashcans = "Trash Cans", treetap = "Tree Tap", undergarden = "The Undergarden", utilitarian = "Utilitarian",
+    utilityvest = "Utility Vest", vsfluidlink = "Sable Hose Connectors", waystones = "Waystones",
+    wirelesschargers = "Wireless Chargers", xnet = "XNet", xtonesreworked = "Xtones Reworked", zamega = "Zamega",
+  }
+  function R.modName(ns)
+    if nice[ns] then return nice[ns] end
+    return (ns:gsub("_", " "):gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b end))
+  end
 end
+-- a real, installed mod id? (recipe data also mentions mods that aren't in this pack, and a few junk ids)
+function R.realMod(ns) return ns ~= "" and ns:match("^[a-z0-9_.%-]+$") ~= nil and not R.NOT_INSTALLED[ns] end
 function R.drawMods()
   -- every mod: the ones you have items (or recipes) from first, biggest first, then all the others A-Z
   local counts, list, seen = {}, {}, {}
@@ -2909,11 +2989,11 @@ function R.drawMods()
   else
     for id in pairs(index) do local ns = R.modOf(id); counts[ns] = (counts[ns] or 0) + 1 end
   end
-  for ns, c in pairs(counts) do list[#list + 1] = { ns = ns, c = c }; seen[ns] = true end
+  for ns, c in pairs(counts) do if R.realMod(ns) then list[#list + 1] = { ns = ns, c = c }; seen[ns] = true end end
   table.sort(list, function(a, b) if a.c ~= b.c then return a.c > b.c end return a.ns < b.ns end)
   local rest = {}
-  for _, i in ipairs(R.id or {}) do local ns = R.modOf(i); if ns ~= "" and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
-  for id in pairs(index) do local ns = R.modOf(id); if ns ~= "" and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
+  for _, i in ipairs(R.id or {}) do local ns = R.modOf(i); if R.realMod(ns) and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
+  for id in pairs(index) do local ns = R.modOf(id); if R.realMod(ns) and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
   table.sort(rest, function(a, b) return R.modName(a):lower() < R.modName(b):lower() end)
   for _, ns in ipairs(rest) do list[#list + 1] = { ns = ns, c = 0 } end
   local total = #list
