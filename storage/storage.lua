@@ -2382,7 +2382,7 @@ local function drawKeyboard(y0)
   button("clr", RX1 + 28, y, RX2, y + 2, "CLEAR", BLACK, RED, function() UI.search = ""; UI.page = 1; rebuildList() end)
   y = y + 3
   button("modpick", RX1, y, RX2, y, "MOD: " .. (UI.mod and R.modName(UI.mod) or "all mods") .. "  " .. string.char(16),
-    UI.mod and BLACK or WHITE, UI.mod and ORANGE or GRAY, function() UI.panel = "mods"; UI.modPage = 1 end)
+    UI.mod and BLACK or WHITE, UI.mod and ORANGE or GRAY, function() UI.panel = "mods"; UI.modPage = 1; UI.modLetter = nil end)
   return y + 2
 end
 
@@ -2901,39 +2901,66 @@ function R.modName(ns)
   return (ns:gsub("_", " "):gsub("^%l", string.upper))
 end
 function R.drawMods()
-  text(RX1, 6, "FILTER BY MOD", YELLOW)
-  local counts, list = {}, {}
+  -- every mod: the ones you have items (or recipes) from first, biggest first, then all the others A-Z
+  local counts, list, seen = {}, {}, {}
   if UI.mode == "recipes" and R.state == "ready" then
     for _, o in ipairs(R.outs) do local ns = R.modOf(R.id[o]); counts[ns] = (counts[ns] or 0) + 1 end
   else
-    for id, it in pairs(index) do local ns = R.modOf(id); counts[ns] = (counts[ns] or 0) + 1 end
+    for id in pairs(index) do local ns = R.modOf(id); counts[ns] = (counts[ns] or 0) + 1 end
   end
-  for ns, c in pairs(counts) do list[#list + 1] = { ns = ns, c = c } end
+  for ns, c in pairs(counts) do list[#list + 1] = { ns = ns, c = c }; seen[ns] = true end
   table.sort(list, function(a, b) if a.c ~= b.c then return a.c > b.c end return a.ns < b.ns end)
-  local rows = H - 12
+  local rest = {}
+  for _, i in ipairs(R.id or {}) do local ns = R.modOf(i); if ns ~= "" and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
+  for id in pairs(index) do local ns = R.modOf(id); if ns ~= "" and not seen[ns] then seen[ns] = true; rest[#rest + 1] = ns end end
+  table.sort(rest, function(a, b) return R.modName(a):lower() < R.modName(b):lower() end)
+  for _, ns in ipairs(rest) do list[#list + 1] = { ns = ns, c = 0 } end
+  local total = #list
+  if UI.modLetter then                                   -- A-Z row: only mods starting with that letter
+    local keep = {}
+    for _, m in ipairs(list) do if R.modName(m.ns):sub(1, 1):upper() == UI.modLetter then keep[#keep + 1] = m end end
+    list = keep
+  end
+  text(RX1, 6, "FILTER BY MOD", YELLOW)
+  local hdr = (UI.modLetter and (#list .. " of ") or "") .. total .. " mods"
+  text(RX2 - #hdr + 1, 6, hdr, LGRAY)
+  local letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  for i = 1, 26 do
+    local ch = letters:sub(i, i)
+    local x, y = RX1 + ((i - 1) % 13) * 3, 10 + math.floor((i - 1) / 13) * 2
+    local on = UI.modLetter == ch
+    button("modL" .. ch, x, y, x + 1, y, ch, on and BLACK or WHITE, on and ORANGE or GRAY, function()
+      UI.modLetter = (UI.modLetter ~= ch) and ch or nil; UI.modPage = 1
+    end)
+  end
+  local rows = H - 18
   local per = rows * 2
   local pages = math.max(1, math.ceil(#list / per))
   UI.modPage = math.min(math.max(1, UI.modPage or 1), pages)
   local colW = math.floor((RX2 - RX1) / 2)
   button("modall", RX1, 8, RX2, 8, "ALL MODS", BLACK, UI.mod and GRAY or LIME, function() UI.mod = nil; UI.panel = nil; UI.page = 1; rebuildList() end)
+  if #list == 0 then text(RX1, 14, "no mods start with " .. tostring(UI.modLetter), GRAY) end
   for i = 1, per do
     local m = list[(UI.modPage - 1) * per + i]
     if not m then break end
     local col, r = (i <= rows) and 0 or 1, (i - 1) % rows
-    local x, y = RX1 + col * (colW + 1), 10 + r
+    local x, y = RX1 + col * (colW + 1), 14 + r
     local on = UI.mod == m.ns
     local bg = on and HILITE or ((r % 2 == 0) and PANEL or BLACK)
     fill(x, y, x + colW - 1, y, bg)
-    local cnt = commas(m.c)
-    text(x, y, fit(R.modName(m.ns), colW - #cnt - 1), on and YELLOW or WHITE, bg)
-    text(x + colW - #cnt, y, cnt, CYAN, bg)
+    local cnt = m.c > 0 and commas(m.c) or ""
+    text(x, y, fit(R.modName(m.ns), colW - #cnt - 1), on and YELLOW or (m.c > 0 and WHITE or GRAY), bg)
+    if m.c > 0 then text(x + colW - #cnt, y, cnt, CYAN, bg) end
     hit("mod:" .. m.ns, x, y, x + colW - 1, y, function() UI.mod = m.ns; UI.panel = nil; UI.page = 1; rebuildList() end)
   end
-  local by = H - 1
-  button("modprev", RX1, by, RX1 + 8, by, string.char(17), YELLOW, UI.modPage > 1 and GRAY or PANEL, function() UI.modPage = UI.modPage - 1 end)
-  text(RX1 + 10, by, UI.modPage .. "/" .. pages, LGRAY)
-  button("modnext", RX1 + 16, by, RX1 + 24, by, string.char(16), YELLOW, UI.modPage < pages and GRAY or PANEL, function() UI.modPage = UI.modPage + 1 end)
-  button("modback", RX1 + 27, by, RX2, by, "BACK", BLACK, YELLOW, function() UI.panel = nil end)
+  local by = H - 3
+  button("modprev", RX1, by, RX1 + 9, by + 2, string.char(17) .. " PREV", YELLOW, UI.modPage > 1 and GRAY or PANEL,
+    function() if UI.modPage > 1 then UI.modPage = UI.modPage - 1 end end)
+  local pg = UI.modPage .. "/" .. pages
+  text(RX1 + 10 + math.floor((9 - #pg) / 2), by + 1, pg, LGRAY)
+  button("modnext", RX1 + 19, by, RX1 + 28, by + 2, "NEXT " .. string.char(16), YELLOW, UI.modPage < pages and GRAY or PANEL,
+    function() if UI.modPage < pages then UI.modPage = UI.modPage + 1 end end)
+  button("modback", RX1 + 30, by, RX2, by + 2, "BACK", BLACK, YELLOW, function() UI.panel = nil end)
 end
 
 local function draw()
