@@ -112,7 +112,7 @@ local function ahead(dir)
   return P.x + DX[P.f + 1], P.y, P.z + DZ[P.f + 1]
 end
 -- one block in a direction. Breaks what's in the way (never inside the base, never another turtle).
-local function step(dir, noDig)
+local function step(dir, noDig, patience)
   local tx, ty, tz = ahead(dir)
   local tries = 0
   while true do
@@ -125,7 +125,7 @@ local function step(dir, noDig)
     tries = tries + 1
     local ok, d = INS[dir]()
     if ok and type(d) == "table" and type(d.name) == "string" and d.name:find("turtle", 1, true) then
-      if tries > 400 then return false, "turtle" end                 -- another turtle: wait for it to pass
+      if tries > (patience or 400) then return false, "turtle" end    -- another turtle: wait for it to pass
       ping("waiting for another turtle"); sleep(0.4 + math.random())
     elseif ok then
       if noDig or protected(tx, ty, tz) then return false, "blocked" end
@@ -146,13 +146,22 @@ local function face(f)
     savePos()
   end
 end
+-- Two turtles meeting in one column: the one going UP always has right of way, the one going
+-- down backs up a block and waits, so they can never block each other for good.
 local function vert(ty, noDig)
-  local guard = 0
+  local guard, backoffs = 0, 0
   while P.y ~= ty do
     guard = guard + 1
-    if guard > 2000 then return false, "lost" end
-    local ok, why, what = step(ty > P.y and "up" or "down", noDig)
-    if not ok then
+    if guard > 3000 then return false, "lost" end
+    local down = ty < P.y
+    local ok, why, what = step(down and "down" or "up", noDig, down and 4 or nil)
+    if not ok and why == "turtle" and down then
+      backoffs = backoffs + 1
+      if backoffs > 60 then return false, "turtle" end                -- (a turtle that never moves: broken)
+      if turtle.getFuelLevel() > 200 then step("up", noDig, 4) end
+      ping("letting another turtle past", true)
+      sleep(2 + math.random() * 4)
+    elseif not ok then
       if why ~= "unbreakable" then return false, why end
       note(what)
       local moved = false                                            -- hard block: step around it
@@ -282,22 +291,28 @@ local function lock(name)
   while true do
     local r = ask({ t = "lock", dock = name })
     if r and r.ok then return true end
-    if not r and os.clock() - start > 30 then return false end      -- mine computer not answering: go anyway
-    ping("waiting for the " .. name .. " chest", true)
+    ping("waiting for the " .. name .. " chest" .. (r and "" or " (mine computer not answering)"), true)
     sleep(2)
   end
 end
 local function unlock(name) if modem then pcall(rednet.broadcast, { t = "unlock", n = info(), dock = name }, PROTO) end end
 local function useDock(name, chest, fn)
   local L = lane()
-  if not vert(L) then return false end
-  if not goTo(chest.x + 3, L, chest.z) then return false end             -- wait beside the column
-  lock(name)
-  local ok = goTo(chest.x, L, chest.z) and vert(chest.y + 1, true)
-  if ok then fn() end
-  vert(L, true)
-  unlock(name)
-  return ok
+  for _ = 1, 30 do
+    if not vert(L) then return false end
+    if not goTo(chest.x + 3, L, chest.z) then return false end           -- wait beside the column
+    lock(name)
+    goTo(chest.x, L, chest.z); vert(chest.y + 1, true)
+    local there = P.x == chest.x and P.z == chest.z and P.y == chest.y + 1
+    if there then fn() end
+    vert(L, true)
+    unlock(name)
+    if there then return true end
+    goTo(chest.x + 3, L, chest.z)                                         -- something was in the way: try again
+    ping("couldn't get onto the " .. name .. " chest - trying again", true)
+    sleep(5 + math.random() * 10)
+  end
+  return false
 end
 local function updateNeeds()
   local r = ask({ t = "needs" }, 4)
@@ -395,6 +410,23 @@ local function setup()
   print("MINER setup")
   print("I must be sitting on TOP of the fuel chest")
   print("(" .. CONF.fuelChest.x .. " " .. CONF.fuelChest.y .. " " .. CONF.fuelChest.z .. ").")
+  -- make sure we really are on the fuel chest (a turtle rebooted halfway through setup is somewhere else)
+  local okB, below = turtle.inspectDown()
+  local onChest = okB and type(below) == "table" and tostring(below.name):find("chest", 1, true)
+  if onChest and peripheral.getType and peripheral.getType("bottom") then
+    local okL, l = pcall(peripheral.call, "bottom", "list")
+    if okL and type(l) == "table" then
+      for _, it in pairs(l) do if it.name ~= "minecraft:coal" and it.name ~= "minecraft:charcoal" then onChest = false end end
+    end
+  end
+  if not onChest then
+    print("")
+    print("I'm not sitting on the fuel chest!")
+    print("Pick me up, put me on top of the fuel chest")
+    print("(" .. CONF.fuelChest.x .. " " .. CONF.fuelChest.y .. " " .. CONF.fuelChest.z .. ") and reboot.")
+    if fs.exists(POSFILE) then fs.delete(POSFILE) end
+    error("", 0)
+  end
   local n
   repeat
     print("Chunk 1: 1 5 9   chunk 2: 2 6 10")
@@ -405,36 +437,52 @@ local function setup()
   if not (JOB and JOB.n == n) then JOB = { n = n, chunk = (groupOf(n)), cell = 0 } end   -- re-placed: keep its progress
   os.setComputerLabel("Miner " .. n)
   burnCarried(100000)                                                      -- the starter coal
-  if turtle.getFuelLevel() < 300 then
-    print("I need fuel first: put some coal in me and reboot.")
+  if turtle.getFuelLevel() < 1000 then
+    print("I need more fuel first: put at least 16 coal")
+    print("in me and reboot. (I have " .. turtle.getFuelLevel() .. ", I need 1000.)")
     error("", 0)
   end
-  -- find out which way we face: try each guess and look for drop-off chest 1 where it should be
+  -- find out which way we face. We leave the fuel chest ONCE (on our turn), then from up high try each
+  -- guess: fly to where drop-off chest 1 would be and look down. A wrong guess just means we were
+  -- somewhere else, so we re-work our position for the next guess instead of flying back.
   local F, D = CONF.fuelChest, CONF.drops[1]
+  local L = DOCKY + CONF.laneUp + n
+  print("Waiting for my turn at the fuel chest...")
+  lock("fuel")
+  P = { x = F.x, y = F.y + 1, z = F.z, f = 0 }
+  while not vert(L, true) do                                   -- a turtle above us: it'll move
+    ping("waiting to get off the fuel chest", true); sleep(5)
+    lock("fuel")
+  end
+  unlock("fuel")
   print("Working out which way I'm facing...")
-  local found
-  -- (we take a turn at drop-off chest 1 like a normal trip, so we never sit on top of a turtle using it)
+  local found, g = nil, 0
+  local function regard(newG)                                  -- where we really are if we started facing newG
+    local dx, dz = P.x - F.x, P.z - F.z
+    for _ = 1, (newG - g) % 4 do dx, dz = -dz, dx end
+    P.x, P.z, P.f = F.x + dx, F.z + dz, (P.f + newG - g) % 4
+    g = newG
+  end
   for guess = 0, 3 do
-    P = { x = F.x, y = F.y + 1, z = F.z, f = guess }
-    local L = DOCKY + CONF.laneUp + n
-    local ok = vert(L, true) and goTo(D.x, L, D.z, false, true)
-    if ok then
+    regard(guess)
+    if goTo(D.x, L, D.z, false, true) then
       lock("drop1")
-      ok = vert(D.y + 1, true)
+      local ok = vert(D.y + 1, true)
+      local okI, d = turtle.inspectDown()
+      if ok and okI and type(d) == "table" and d.name and d.name:find("chest", 1, true) then found = guess end
+      vert(L, true)
+      unlock("drop1")
+      if found then break end
+    else
+      vert(L, true)
     end
-    local okI, d = turtle.inspectDown()
-    if ok and okI and type(d) == "table" and d.name and d.name:find("chest", 1, true) then found = guess; vert(L, true); unlock("drop1"); break end
-    vert(L, true); unlock("drop1"); goTo(F.x, L, F.z, false, true)
-    if not vert(F.y + 1, true) then print("I got stuck on the way back. Put me back on the fuel chest and reboot."); error("", 0) end
-    face(guess)                                                -- turn back the way we started
   end
   if not found then
     print("I couldn't find drop-off chest 1 from up high.")
     print("The space above the chests must be open to the sky.")
-    local dirs = { n = 0, e = 1, s = 2, w = 3 }
-    local f
-    repeat write("Which way does my FRONT face (n/e/s/w)? "); f = dirs[(read() or ""):sub(1, 1):lower()] until f
-    P = { x = F.x, y = F.y + 1, z = F.z, f = f }
+    print("Pick me up, put me back on the fuel chest, reboot.")
+    if fs.exists(POSFILE) then fs.delete(POSFILE) end
+    error("", 0)
   end
   savePos(); saveJob()
   print("Ready: turtle " .. n .. ", facing " .. ({ "north", "east", "south", "west" })[P.f + 1])
@@ -520,10 +568,14 @@ local function mine()
           if freeSlots() <= 2 then tidy() end
           if freeSlots() <= 1 then dockRun("inventory full") end
           JOB.cell = JOB.cell + 1; saveJob()
+          if JOB.cell % 32 == 0 then                                   -- someone already did this layer? (old turtles report late)
+            local r = ask({ t = "check", chunk = CH, y = y }, 2)
+            if r and r.gone then JOB.layer, JOB.cell = nil, 0; saveJob(); break end
+          end
           ping("chunk " .. CH .. ", y " .. y .. " - layer " .. math.floor(JOB.cell * 100 / 256) .. "% done")
         end
       end
-      fin = y
+      if JOB.layer == y then fin = y end
       if inQ(P.x, P.z) then horiz("z", S.z); horiz("x", S.x) end         -- back to our corner along the dug rows
     end
   end

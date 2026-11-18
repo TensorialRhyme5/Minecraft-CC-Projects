@@ -187,15 +187,20 @@ local function handle(from, m)
   local n = tonumber(m.n)
   if m.t == "status" and n then
     turtles[n] = m; m.at = os.clock(); m.from = from
+    for _, l in pairs(locks) do if l.n == n then l.at = os.clock() end end   -- still alive: keep its turn
     local p = tonumber(m.chunk) and PLAN[tonumber(m.chunk)]                  -- still alive: keep its layer
     local cl = p and p.claim and m.layer and p.claim[m.layer]
     if cl and cl.n == n then cl.at = os.epoch("utc") end
+  elseif m.t == "check" and n then                                          -- is this layer still this turtle's?
+    local p = PLAN[tonumber(m.chunk)]
+    local cl = p and p.claim and p.claim[m.y]
+    reply(from, { t = "check", gone = (p and p.done and p.done[m.y]) or (cl ~= nil and cl.n ~= n) or false }, m.id)
   elseif m.t == "claim" and n then
     local y, gc, wait = claimLayer(n, m)
     reply(from, { t = "claim", y = y, chunk = gc, wait = (not y and wait) or nil }, m.id)
   elseif m.t == "lock" and n then
     local l = locks[m.dock]
-    if not l or l.n == n or os.clock() - l.at > 180 then
+    if not l or l.n == n or os.clock() - l.at > 90 then                      -- (a turtle silent for 90s loses its turn)
       locks[m.dock] = { n = n, at = os.clock() }
       reply(from, { t = "lock", ok = true }, m.id)
     else
