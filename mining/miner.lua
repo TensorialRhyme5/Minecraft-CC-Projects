@@ -221,9 +221,25 @@ local function vert(ty, noDig, maxBack)
         BLOCKER = "turtle at " .. P.x .. " " .. (P.y - 1) .. " " .. P.z
         return false, "turtle"
       end
-      if turtle.getFuelLevel() > 200 then step("up", noDig, 4) end
+      -- step SIDEWAYS out of the column, let it pass, then step back in (backing up a block doesn't
+      -- work when several turtles share a column). Never out of our chunk, never into a chest column.
+      local inside, moved = inQ(P.x, P.z), nil
+      for k = 0, 3 do
+        local f = (P.f + k) % 4
+        local nx, nz = P.x + DX[f + 1], P.z + DZ[f + 1]
+        local okSpot = (not inside or inQ(nx, nz)) and not protected(nx, P.y, nz)
+        for _, c in ipairs({ CONF.fuelChest, CONF.drops[1], CONF.drops[2] }) do
+          if nx == c.x and nz == c.z then okSpot = false end
+        end
+        if okSpot then face(f); if step("fwd", noDig, 3) then moved = f; break end end
+      end
       ping("letting another turtle past", true)
-      sleep(2 + math.random() * 4)
+      sleep(3 + math.random() * 4)
+      if moved then
+        face((moved + 2) % 4); step("fwd", noDig)                     -- back into our column
+      elseif turtle.getFuelLevel() > 200 then
+        step("up", noDig, 4)                                         -- (nowhere to go sideways: back up)
+      end
     elseif not ok then
       if why ~= "unbreakable" then return false, why end
       note(what)
