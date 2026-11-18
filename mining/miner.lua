@@ -413,13 +413,18 @@ local function setup()
   local F, D = CONF.fuelChest, CONF.drops[1]
   print("Working out which way I'm facing...")
   local found
+  -- (we take a turn at drop-off chest 1 like a normal trip, so we never sit on top of a turtle using it)
   for guess = 0, 3 do
     P = { x = F.x, y = F.y + 1, z = F.z, f = guess }
     local L = DOCKY + CONF.laneUp + n
-    local ok = vert(L, true) and goTo(D.x, L, D.z, false, true) and vert(D.y + 1, true)
+    local ok = vert(L, true) and goTo(D.x, L, D.z, false, true)
+    if ok then
+      lock("drop1")
+      ok = vert(D.y + 1, true)
+    end
     local okI, d = turtle.inspectDown()
-    if ok and okI and type(d) == "table" and d.name and d.name:find("chest", 1, true) then found = guess; break end
-    vert(L, true); goTo(F.x, L, F.z, false, true)
+    if ok and okI and type(d) == "table" and d.name and d.name:find("chest", 1, true) then found = guess; vert(L, true); unlock("drop1"); break end
+    vert(L, true); unlock("drop1"); goTo(F.x, L, F.z, false, true)
     if not vert(F.y + 1, true) then print("I got stuck on the way back. Put me back on the fuel chest and reboot."); error("", 0) end
     face(guess)                                                -- turn back the way we started
   end
