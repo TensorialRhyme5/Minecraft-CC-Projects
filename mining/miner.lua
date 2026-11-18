@@ -296,6 +296,14 @@ local function lock(name)
   end
 end
 local function unlock(name) if modem then pcall(rednet.broadcast, { t = "unlock", n = info(), dock = name }, PROTO) end end
+local function lost(name)                                -- our map is wrong: stop before we do damage
+  unlock(name)
+  if fs.exists(POSFILE) then fs.delete(POSFILE) end
+  JOB.verified = nil; saveJob()
+  print("I'M LOST - I thought I was at the " .. name .. " chest.")
+  print("Pick me up, put me on top of the fuel chest, reboot.")
+  while true do ping("LOST - pick me up, put me on the fuel chest and reboot", true); sleep(10) end
+end
 local function useDock(name, chest, fn)
   local L = lane()
   for _ = 1, 30 do
@@ -304,16 +312,11 @@ local function useDock(name, chest, fn)
     lock(name)
     goTo(chest.x, L, chest.z); vert(chest.y + 1, true)
     local there = P.x == chest.x and P.z == chest.z and P.y == chest.y + 1
-    if there then
-      local okI, d = turtle.inspectDown()
-      if not (okI and type(d) == "table" and d.name == "minecraft:chest") then  -- we're not where we think we are
-        unlock(name)
-        if fs.exists(POSFILE) then fs.delete(POSFILE) end
-        print("I'M LOST - I thought I was on the " .. name .. " chest.")
-        print("Pick me up, put me on top of the fuel chest, reboot.")
-        while true do ping("LOST - pick me up, put me on the fuel chest and reboot", true); sleep(10) end
-      end
-    end
+    local okI, d = turtle.inspectDown()
+    local below = okI and type(d) == "table" and tostring(d.name) or nil
+    if there and below ~= "minecraft:chest" then lost(name) end          -- not where we think we are
+    if not there and P.x == chest.x and P.z == chest.z and below and below ~= "minecraft:chest"
+      and not below:find("turtle", 1, true) and P.y > chest.y + 1 then lost(name) end   -- landed on something else
     if there then fn() end
     vert(L, true)
     unlock(name)
@@ -506,6 +509,7 @@ local function setup()
     if fs.exists(POSFILE) then fs.delete(POSFILE) end
     error("", 0)
   end
+  JOB.verified = true                                          -- (both drop-off chests were where they should be)
   savePos(); saveJob()
   print("Ready: turtle " .. n .. ", facing " .. ({ "north", "east", "south", "west" })[P.f + 1])
 end
@@ -562,6 +566,10 @@ end
 local function mine()
   if not modem then
     print("I need an ender modem to talk to the mine computer."); error("", 0)
+  end
+  if not JOB.verified then                                             -- once: fly home and make sure our map is right
+    dockRun("checking I know where I am")
+    JOB.verified = true; saveJob()
   end
   local fin
   while true do
