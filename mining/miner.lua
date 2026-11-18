@@ -304,6 +304,16 @@ local function useDock(name, chest, fn)
     lock(name)
     goTo(chest.x, L, chest.z); vert(chest.y + 1, true)
     local there = P.x == chest.x and P.z == chest.z and P.y == chest.y + 1
+    if there then
+      local okI, d = turtle.inspectDown()
+      if not (okI and type(d) == "table" and d.name == "minecraft:chest") then  -- we're not where we think we are
+        unlock(name)
+        if fs.exists(POSFILE) then fs.delete(POSFILE) end
+        print("I'M LOST - I thought I was on the " .. name .. " chest.")
+        print("Pick me up, put me on top of the fuel chest, reboot.")
+        while true do ping("LOST - pick me up, put me on the fuel chest and reboot", true); sleep(10) end
+      end
+    end
     if there then fn() end
     vert(L, true)
     unlock(name)
@@ -469,9 +479,21 @@ local function setup()
       lock("drop1")
       local ok = vert(D.y + 1, true)
       local okI, d = turtle.inspectDown()
-      if ok and okI and type(d) == "table" and d.name and d.name:find("chest", 1, true) then found = guess end
+      if ok and okI and type(d) == "table" and d.name == "minecraft:chest" then found = guess end
       vert(L, true)
       unlock("drop1")
+      if found then                                            -- double-check with drop-off chest 2
+        local D2 = CONF.drops[2]
+        found = nil
+        if goTo(D2.x, L, D2.z, false, true) then
+          lock("drop2")
+          local ok2 = vert(D2.y + 1, true)
+          local okJ, d2 = turtle.inspectDown()
+          if ok2 and okJ and type(d2) == "table" and d2.name == "minecraft:chest" then found = guess end
+          vert(L, true)
+          unlock("drop2")
+        end
+      end
       if found then break end
     else
       vert(L, true)
