@@ -87,6 +87,7 @@ local function ask(msg, timeout)
     if type(r) == "table" and r.re == msg.id then return r end
   end
 end
+local BUSY, REBOOT = false, false               -- moving/turning right now / restart as soon as that's done
 local HARD = false                             -- did the last trip run into a block we can't break?
 local function note(name)
   HARD = true
@@ -120,10 +121,14 @@ local function step(dir, noDig, patience)
   while true do
     -- the fuel level tells us after a server restart whether this move happened
     P.pend = { x = tx, y = ty, z = tz, fuel = turtle.getFuelLevel() }; savePos()
+    BUSY = true
     local moved = MOVE[dir]()
     P.pend = nil
-    if moved then P.x, P.y, P.z = tx, ty, tz; savePos(); ping(); return true end
+    if moved then P.x, P.y, P.z = tx, ty, tz end
     savePos()
+    BUSY = false
+    if REBOOT then os.reboot() end
+    if moved then ping(); return true end
     tries = tries + 1
     local ok, d = INS[dir]()
     if ok and type(d) == "table" and type(d.name) == "string" and d.name:find("turtle", 1, true) then
@@ -144,8 +149,15 @@ local function step(dir, noDig, patience)
 end
 local function face(f)
   while P.f ~= f do
-    if (f - P.f) % 4 == 3 then turtle.turnLeft(); P.f = (P.f + 3) % 4 else turtle.turnRight(); P.f = (P.f + 1) % 4 end
+    BUSY = true                                        -- (a restart now would lose which way we face)
+    if (f - P.f) % 4 == 3 then
+      if turtle.turnLeft() then P.f = (P.f + 3) % 4 end
+    else
+      if turtle.turnRight() then P.f = (P.f + 1) % 4 end
+    end
     savePos()
+    BUSY = false
+    if REBOOT then os.reboot() end
   end
 end
 -- Two turtles meeting in one column: the one going UP always has right of way, the one going
@@ -688,7 +700,9 @@ local function listen()
   while true do
     local _, m = rednet.receive(PROTO)
     if type(m) == "table" and m.t == "cmd" and (m.n == nil or m.n == info()) then
-      if m.cmd == "reboot" then os.reboot() end                        -- U on the mine computer: update
+      if m.cmd == "reboot" then                                        -- U on the mine computer: update
+        if BUSY then REBOOT = true else os.reboot() end                -- (never in the middle of a move or turn)
+      end
       CMD = m.cmd
     end
   end
