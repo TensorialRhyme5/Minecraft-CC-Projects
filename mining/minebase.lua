@@ -315,7 +315,7 @@ local function draw()
   local busy = {}
   for d, l in pairs(locks) do busy[#busy + 1] = d .. "=" .. l.n end
   print("Turns: " .. (#busy > 0 and table.concat(busy, " ") or "free") .. "  Fuel: " ..
-    (fuelCoal and (fuelCoal .. " coal" .. (fuelCoal < 64 and " (LOW)" or "")) or ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
+    (fuelCoal and (fuelCoal .. (fuelCoal < 64 and " (LOW)" or "")) or ("not found (" .. (CFG.exclude[1] or "none set") .. ")")))
   term.setTextColour(colors.white)
   write("Chests: " .. chestCount.iron .. " iron, " .. chestCount.copper .. " copper")
   if chestCount.fill then

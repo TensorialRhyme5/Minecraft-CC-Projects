@@ -7,7 +7,7 @@
 --  group moves on to its chunk in the next 2x2 south (chunk + 4).
 --  Each turtle uses its own corner of the chunk to go up and down,
 --  travels at its own height ("lane"), takes turns at the chests and
---  splits every coal 50/50 between the fuel chest and storage.
+--  refuels from the fuel chest (charcoal) and sends every coal it mines to storage.
 -- ============================================================
 
 local CONF = {
@@ -365,67 +365,48 @@ local function updateNeeds()
   end
   FUEL_LOW = r.fuelLow == true
 end
+-- the fuel chest (charcoal) is only for burning: we take what we need into one empty slot, burn it,
+-- and put back what's left. Coal we mine is NOT burned here - it all goes to storage.
 local function fuelStop()
-  -- every coal goes into the fuel chest, then we take back what we burn plus half of it for storage
-  -- (that half rides along and goes into the drop-off chest next time)
-  local c = coalCount()
-  for s = 1, 16 do
-    local d = turtle.getItemDetail(s)
-    if d and COAL[d.name] then turtle.select(s); turtle.dropDown() end
+  local k
+  for s = 1, 16 do if turtle.getItemCount(s) == 0 then k = s; break end end
+  if not k then burnCarried(CONF.fuelTarget); return end               -- no room (drop-off was skipped)
+  turtle.select(k)
+  local function burnK()
+    while turtle.getFuelLevel() < CONF.fuelTarget and turtle.getItemCount(k) > 0 do
+      if not turtle.refuel(1) then break end
+    end
   end
-  turtle.select(1)
   for _ = 1, 40 do                                                     -- top up from the chest
     local needItems = math.ceil((CONF.fuelTarget - turtle.getFuelLevel()) / 80)
     if needItems <= 0 then break end
-    for k = 1, 16 do if turtle.getItemCount(k) == 0 then turtle.select(k); break end end
     if not turtle.suckDown(math.min(64, needItems)) then break end
-    burnCarried(CONF.fuelTarget)
+    burnK()
+    if turtle.getItemCount(k) > 0 then break end                       -- (not burnable: leave it)
   end
-  -- fuel chest empty and we can't make it out and back: sit right here until coal shows up
+  -- fuel chest empty and we can't make it out and back: sit right here until fuel shows up
   local need = costHome() + 2 * (lane() - CONF.bands[#CONF.bands].bottom) + 300
   while turtle.getFuelLevel() < need do
-    ping("waiting for coal in the fuel chest", true)
+    if coalCount() > 0 then burnCarried(need) end                      -- last resort: coal we're carrying
+    if turtle.getFuelLevel() >= need then break end
+    ping("waiting for charcoal in the fuel chest", true)
     ask({ t = "lock", dock = "fuel" })                                -- keep our turn while we wait
     sleep(20)
-    for k = 1, 16 do if turtle.getItemCount(k) == 0 then turtle.select(k); break end end
-    if turtle.suckDown(64) then burnCarried(CONF.fuelTarget) end
+    turtle.select(k)
+    if turtle.suckDown(64) then burnK() end
   end
-  for s = 1, 16 do                                                     -- anything not burned goes back
-    local d = turtle.getItemDetail(s)
-    if d and COAL[d.name] then turtle.select(s); turtle.dropDown() end
-  end
-  for k = 1, 16 do if turtle.getItemCount(k) == 0 then turtle.select(k); break end end
-  local back = math.floor(c / 2)                                       -- your half, always
-  JOB.carry = 0
-  while back > 0 do
-    local before = coalCount()
-    if not turtle.suckDown(math.min(64, back)) then break end
-    local got = coalCount() - before
-    back = back - got; JOB.carry = JOB.carry + got
-  end
-  saveJob()
+  turtle.select(k)
+  if turtle.getItemCount(k) > 0 then turtle.dropDown() end             -- what we didn't burn goes back
+  JOB.carry = nil; saveJob()
   turtle.select(1)
 end
-local function dropAll()
-  local carry = math.min(JOB.carry or 0, coalCount())                  -- last trip's storage half of the coal
+local function dropAll()                                               -- everything goes to storage, coal too
   for s = 1, 16 do
     turtle.select(s)
-    local d = turtle.getItemDetail(s)
-    if d and COAL[d.name] then
-      local n = math.min(carry, d.count)
-      while n > 0 do
-        local before = turtle.getItemCount(s)
-        if not turtle.dropDown(n) then ping("drop-off chest is full - waiting", true); sleep(5) end
-        local gone = before - turtle.getItemCount(s)
-        n = n - gone; carry = carry - gone
-      end
-    else
-      while turtle.getItemCount(s) > 0 do
-        if not turtle.dropDown() then ping("drop-off chest is full - waiting", true); sleep(5) end
-      end
+    while turtle.getItemCount(s) > 0 do
+      if not turtle.dropDown() then ping("drop-off chest is full - waiting", true); sleep(5) end
     end
   end
-  JOB.carry = 0; saveJob()
   turtle.select(1)
 end
 local function dockRun(why)
