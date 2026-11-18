@@ -564,7 +564,7 @@ local function rankRecipes(out)
 end
 
 local UI = { search = "", page = 1, selected = nil, perPage = 0, lowAlerted = {},
-  mode = "items", rsel = nil, rvar = 1, crafts = 1, canMake = false }
+  mode = "items", rsel = nil, rvar = 1, crafts = 1, canMake = false, sendTo = "pickup" }   -- home screen: barrel first
 
 local hits, flash = {}, {}
 local function hit(id, x1, y1, x2, y2, fn) hits[#hits + 1] = { id = id, x1 = x1, y1 = y1, x2 = x2, y2 = y2, fn = fn } end
@@ -2360,7 +2360,7 @@ local function drawList()
       text(x + colW - #cnt - 1, y, cnt, low and RED or CYAN, bg)
       if low then text(x + colW - #cnt - 3, y, "!", RED, bg) end
       local id = it.id
-      hit("item:" .. id, x, y, x + colW - 1, y, function() UI.selected = (UI.selected == id) and nil or id end)
+      hit("item:" .. id, x, y, x + colW - 1, y, function() UI.selected = (UI.selected == id) and nil or id; UI.sendTo = "pickup" end)
     end
   end
   -- paging
@@ -2465,6 +2465,7 @@ local function drawDetail()
   -- retrieve
   local _, kind = currentPickup()
   local who = owners()
+  UI.sendTo = UI.sendTo or "pickup"
   if UI.sendTo ~= "pickup" then
     local okWho = false
     for _, w in ipairs(who) do if w == UI.sendTo then okWho = true end end
