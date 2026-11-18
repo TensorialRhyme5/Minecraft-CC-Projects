@@ -83,22 +83,50 @@ local function claimLayer(n, m)
     return not cl or cl.n == n or (now - (cl.at or 0) > 30 * 60 * 1000 and os.clock() - STARTED > 120)
   end
   local give, gc, wait
+  local kk = tonumber(m.k) or 0
   if m.have and free(m.have) then give, gc = m.have, c
   else
-    -- the earliest chunk of this turtle's group that still has a free layer (top first)
+    -- 2x2 by 2x2: first our own chunk, then help the chunk of the same 2x2 with the most left,
+    -- and only when the whole 2x2 is handed out move on to our chunk in the next 2x2
     local list = type(m.chunks) == "table" and m.chunks or { c }
-    for _, cc in ipairs(list) do
-      p = chunkPlan(tonumber(cc) or c)
+    local last = tonumber(m.last) or list[#list]
+    local function freeCount(cc)
+      p = chunkPlan(cc)
+      local f = 0
+      for _, y in ipairs(LAYERS) do if free(y) then f = f + 1 end end
+      return f
+    end
+    local order, seenC = {}, {}
+    for _, own in ipairs(list) do
+      own = tonumber(own)
+      if own and not seenC[own] then
+        seenC[own] = true; order[#order + 1] = own
+        local base, others = math.floor((own - 1) / 4) * 4, {}
+        for i = 1, 4 do
+          local o = base + i
+          if o ~= own and o <= last and not seenC[o] then others[#others + 1] = { c = o, f = freeCount(o) } end
+        end
+        table.sort(others, function(a, b) return a.f > b.f end)
+        for _, o in ipairs(others) do seenC[o.c] = true; order[#order + 1] = o.c end
+      end
+    end
+    for _, cc in ipairs(order) do
+      p = chunkPlan(cc)
       for _, y in ipairs(LAYERS) do
-        if free(y) then give, gc = y, tonumber(cc) or c; break end
+        if free(y) then give, gc = y, cc; break end
         if not p.done[y] then wait = true end                            -- someone else is still on it
       end
       if give then break end
     end
+    if give then                                                         -- a corner nobody else in that chunk uses
+      local used = {}
+      for y, cl in pairs(chunkPlan(gc).claim) do if cl.n ~= n and cl.k then used[cl.k] = true end end
+      if used[kk] then for k = 0, 3 do if not used[k] then kk = k; break end end end
+    end
   end
-  if give then chunkPlan(gc).claim[give] = { n = n, at = now } end
+  if give then chunkPlan(gc).claim[give] = { n = n, at = now, k = kk } end
   savePlan()
-  return give, gc, wait
+  return give, gc, wait, kk
 end
 local function progress(c)                         -- layers done, being mined, total
   local p = PLAN[c]
@@ -196,8 +224,8 @@ local function handle(from, m)
     local cl = p and p.claim and p.claim[m.y]
     reply(from, { t = "check", gone = (p and p.done and p.done[m.y]) or (cl ~= nil and cl.n ~= n) or false }, m.id)
   elseif m.t == "claim" and n then
-    local y, gc, wait = claimLayer(n, m)
-    reply(from, { t = "claim", y = y, chunk = gc, wait = (not y and wait) or nil }, m.id)
+    local y, gc, wait, k = claimLayer(n, m)
+    reply(from, { t = "claim", y = y, chunk = gc, k = y and k or nil, wait = (not y and wait) or nil }, m.id)
   elseif m.t == "lock" and n then
     local l = locks[m.dock]
     if not l or l.n == n or os.clock() - l.at > 90 then                      -- (a turtle silent for 90s loses its turn)

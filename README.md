@@ -122,7 +122,8 @@ take turns at the chests (the mine computer gives out the turns).
 - **Turtle numbers / groups:** turtle n works in group (n-1)%4+1, three to a chunk: 1 5 9 on chunk 1, 2 6 10 on chunk 2,
   3 7 11 on chunk 3, 4 8 12 on chunk 4 (13-16 would be a 4th per chunk). The mine computer keeps the plan
   (`mine_plan.txt`) and hands out one 3-block layer at a time, top to bottom, so turtles sharing a chunk never dig the
-  same layer; each uses its own corner to go up and down. When a chunk is all handed out the group moves to its chunk
+  same layer; each uses its own corner to go up and down. When a group's chunk is all handed out it helps the chunk of
+  the same 2x2 with the most left; only when the whole 2x2 is handed out does everyone move to their chunk
   in the next 2x2 south (chunks 5-8: x -96..-65, z -2208..-2177 - force-load those). A layer whose turtle goes quiet
   for 30 minutes is handed to someone else.
 - **Turtles:** install `mining/miner_startup.lua` as `startup.lua`, put 16 coal in the turtle, place it on

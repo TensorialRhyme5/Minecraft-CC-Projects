@@ -562,11 +562,18 @@ local function claim(fin)
   local tries = 0
   local chunks = {}
   for c = groupOf(JOB.n), CONF.lastChunk, 4 do chunks[#chunks + 1] = c end
+  if fin then JOB.layer, JOB.cell = nil, 0 end                         -- (the next layer always starts fresh)
   while true do
-    local r = ask({ t = "claim", chunk = CH, chunks = chunks, have = JOB.layer, fin = fin, mig = JOB.mig }, 4)
+    local r = ask({ t = "claim", chunk = CH, chunks = chunks, last = CONF.lastChunk, have = JOB.layer, fin = fin,
+      mig = JOB.mig, k = JOB.layer and K or select(2, groupOf(JOB.n)) }, 4)
     if r and r.t == "claim" then
       JOB.mig = nil
-      if r.y and r.chunk and r.chunk ~= CH then JOB.chunk = r.chunk; place() end
+      if r.y and ((r.chunk and r.chunk ~= CH) or (r.k and r.k ~= K)) then
+        if inQ(P.x, P.z) and P.y < lane() then                         -- leave this chunk/corner the way we came in
+          horiz("z", S.z); horiz("x", S.x)
+        end
+        JOB.chunk = r.chunk or CH; JOB.k = r.k or JOB.k; place()
+      end
       if r.y ~= JOB.layer then JOB.layer, JOB.cell = r.y, 0 end
       saveJob()
       return r.y, r.wait
@@ -577,7 +584,7 @@ local function claim(fin)
   end
 end
 function place()
-  CH, K = JOB.chunk, select(2, groupOf(JOB.n))
+  CH, K = JOB.chunk, JOB.k or select(2, groupOf(JOB.n))
   Q = corner(CH)
   EAST, SOUTH = (K == 1 or K == 2), (K == 1 or K == 3)
   S = { x = EAST and Q.x + 15 or Q.x, z = SOUTH and Q.z + 15 or Q.z }
