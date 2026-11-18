@@ -107,6 +107,18 @@ local function prettyId(id)                                  -- "minecraft:iron_
   n = n:gsub("_", " ")
   return (n:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
 end
+-- items that all share one in-game name: say which one it is (the item id knows)
+local function betterName(id, name)
+  local base = tostring(id):gsub("[#@].*$", "")
+  local n = base:match(":(.+)$") or base
+  local t = n:match("^(.+)_smithing_template$")
+  if t then return "Smithing Template (" .. prettyId(t) .. ")" end
+  t = n:match("^music_disc_(.+)$")
+  if t then return "Music Disc (" .. prettyId(t) .. ")" end
+  t = n:match("^(.+)_banner_pattern$")
+  if t then return "Banner Pattern (" .. prettyId(t) .. ")" end
+  return name
+end
 local function clean(s)
   s = tostring(s or "")
   return (s:gsub("\194\167.", ""):gsub("[\192-\255][\128-\191]*", "?"))   -- strip colour codes / unicode
@@ -136,6 +148,8 @@ if fs.exists(SAVE) then
     for k, v in pairs(data.woodOf) do if v == false then data.woodOf[k] = nil end end   -- unfinished lookups: try again
     data.smeltStop = d.smeltStop == true
     data.smeltHeld = type(d.smeltHeld) == "table" and d.smeltHeld or {}
+    data.badRc = type(d.badRc) == "table" and d.badRc or nil              -- recipes the game turned down
+    for id, nm in pairs(data.names) do data.names[id] = betterName(id, nm) end   -- e.g. "Smithing Template (Netherite Upgrade)"
   end
 end
 -- long names slide sideways like the jukebox's song titles (short ones are left alone)
@@ -359,7 +373,7 @@ local function loadRecipes()
     elseif kind == "G" then ng = ng + 1; grpRaw[ng] = line:sub(3)
     elseif kind == "I" then
       local a, b = line:match("^I\t([^\t]+)\t(.*)$")
-      ni = ni + 1; id[ni] = a; name[ni] = b; byId[a] = ni
+      ni = ni + 1; id[ni] = a; name[ni] = betterName(a, b); byId[a] = ni
     elseif kind == "T" then
       local a, b = line:match("^T\t([^\t]+)\t(.*)$")
       nt = nt + 1; tagName[nt] = a; tagRaw[nt] = b or ""
@@ -1593,7 +1607,7 @@ local function resolveNames(limit)
       local l = e.locs[1]
       local ok, d = pcall(peripheral.call, l.inv, "getItemDetail", l.slot)
       if ok and type(d) == "table" and d.displayName then
-        data.names[id] = (id ~= e.name) and variantLabel(d) or clean(d.displayName); dirty = true
+        data.names[id] = (id ~= e.name) and variantLabel(d) or betterName(id, clean(d.displayName)); dirty = true
       else
         data.names[id] = prettyId(e.name or id); dirty = true
       end
