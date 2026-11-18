@@ -2364,18 +2364,19 @@ local function drawList()
   elseif age < 20 then text(LX1 + math.floor((LX2 - LX1 - #status.msg) / 2), H, fit(status.msg, LX2 - LX1 - 24), status.col) end
 end
 
-local KEYS = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" }
+local KEYS = { "1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" }
+local KEY_OFF = { 0, 0, 2, 4 }
 local function drawKeyboard(y0)
   text(RX1, y0, "SEARCH KEYBOARD", YELLOW)
   local y = y0 + 2
   for r, row in ipairs(KEYS) do
-    local offset = (r - 1) * 2
+    local offset = KEY_OFF[r]
     for i = 1, #row do
       local ch = row:sub(i, i)
       local x = RX1 + offset + (i - 1) * 4
-      button("key" .. ch, x, y, x + 2, y + 2, ch, WHITE, GRAY, function() UI.search = UI.search .. ch:lower(); UI.page = 1; rebuildList(true) end)
+      button("key" .. ch, x, y, x + 2, y + 1, ch, r == 1 and BLACK or WHITE, r == 1 and LGRAY or GRAY, function() UI.search = UI.search .. ch:lower(); UI.page = 1; rebuildList(true) end)
     end
-    y = y + 4
+    y = y + 3
   end
   button("space", RX1, y, RX1 + 14, y + 2, "SPACE", WHITE, GRAY, function() UI.search = UI.search .. " "; rebuildList(true) end)
   button("del", RX1 + 16, y, RX1 + 26, y + 2, "DEL", WHITE, GRAY, function() UI.search = UI.search:sub(1, -2); UI.page = 1; rebuildList(true) end)
@@ -2949,7 +2950,7 @@ function R.drawMods()
     local bg = on and HILITE or ((r % 2 == 0) and PANEL or BLACK)
     fill(x, y, x + colW - 1, y, bg)
     local cnt = m.c > 0 and commas(m.c) or ""
-    text(x, y, fit(R.modName(m.ns), colW - #cnt - 1), on and YELLOW or (m.c > 0 and WHITE or GRAY), bg)
+    text(x, y, slide(R.modName(m.ns), colW - #cnt - 1), on and YELLOW or (m.c > 0 and WHITE or GRAY), bg)
     if m.c > 0 then text(x + colW - #cnt, y, cnt, CYAN, bg) end
     hit("mod:" .. m.ns, x, y, x + colW - 1, y, function() UI.mod = m.ns; UI.panel = nil; UI.page = 1; rebuildList() end)
   end
