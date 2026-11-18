@@ -401,7 +401,9 @@ end
 local function fuelStop()
   local k
   for s = 1, 16 do if turtle.getItemCount(s) == 0 then k = s; break end end
-  if not k then burnCarried(CONF.fuelTarget); return end               -- no room (drop-off was skipped)
+  if not k then burnCarried(CONF.fuelTarget) end                       -- no room: burn our own coal to make some
+  for s = 1, 16 do if not k and turtle.getItemCount(s) == 0 then k = s end end
+  if not k then return end
   turtle.select(k)
   local function burnK()
     while turtle.getFuelLevel() < CONF.fuelTarget and turtle.getItemCount(k) > 0 do
@@ -452,8 +454,7 @@ local function dockRun(why)
       sleep(60)
     end
   end
-  local fueled = false
-  if turtle.getFuelLevel() < 800 then refuel(); fueled = true end      -- nearly empty: fuel first
+  if turtle.getFuelLevel() < 300 then refuel() end                     -- almost empty: fuel first
   local a = dropNo()
   while not (useDock("drop" .. a, CONF.drops[a], dropAll, true) or
              useDock("drop" .. (3 - a), CONF.drops[3 - a], dropAll, true)) do   -- blocked: use the other one
@@ -461,7 +462,7 @@ local function dockRun(why)
     sleep(60)
   end
   updateNeeds()
-  if not fueled then refuel() end
+  refuel()                                                            -- (pockets empty now: room for charcoal)
 end
 local function park(final)
   local d = dropDock()
@@ -647,8 +648,10 @@ local function mine()
       B = LAYER[y] or { y = y, top = y + 1, bottom = y - 1 }
       while JOB.cell <= 255 do
         if CMD == "recall" then dockRun("recalled"); park() end
-        if turtle.getFuelLevel() < costHome() then burnCarried(costHome() + 600) end
-        if turtle.getFuelLevel() < costHome() then dockRun("low on fuel") end
+        -- enough to get down to the layer (if we're not there yet), work a while and come all the way back
+        local need = costHome() + 2 * math.abs(P.y - y) + 100
+        if turtle.getFuelLevel() < need then burnCarried(need + 600) end
+        if turtle.getFuelLevel() < need then dockRun("low on fuel") end
         local okR, whyR = reach(JOB.cell, y)
         if not okR and (whyR == "unbreakable" or whyR == "turtle") and inQ(P.x, P.z) then   -- (a turtle that won't move: a broken one)
           JOB.cell = JOB.cell + 1; saveJob()                           -- a block we can't break: skip that spot
