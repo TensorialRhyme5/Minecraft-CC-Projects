@@ -17,7 +17,17 @@ local CONF = {
   -- the mining dimension is flat layers: grass 252, dirt 248-251, stone 129-247, deepslate 65-128,
   -- netherrack 1-64, end stone -63..0, bedrock -64. Each band is mined top-down, one after the other.
   bands = { { top = 128, bottom = 65 }, { top = 252, bottom = 129 }, { top = 64, bottom = -63 } },
-  lastChunk = 8,                            -- chunks 1-4: the first 2x2, 5-8: the 2x2 south of it
+  -- every chunk to mine, in order, by its north-west corner. Each 4 in a row is one 2x2 (NW, NE, SW, SE):
+  -- the whole 2x2 is finished before anyone moves on to the next one.
+  chunks = {
+    { x = -96, z = -2240 }, { x = -80, z = -2240 }, { x = -96, z = -2224 }, { x = -80, z = -2224 },      -- 1-4  first 2x2
+    { x = -96, z = -2208 }, { x = -80, z = -2208 }, { x = -96, z = -2192 }, { x = -80, z = -2192 },      -- 5-8  south of it
+    { x = -128, z = -2240 }, { x = -112, z = -2240 }, { x = -128, z = -2224 }, { x = -112, z = -2224 },  -- 9-12 west
+    { x = -64, z = -2240 }, { x = -48, z = -2240 }, { x = -64, z = -2224 }, { x = -48, z = -2224 },      -- 13-16 east
+  },
+  -- flying between the base and a chunk we always go along this row first (z -2240..-2225, x -128..-33 are
+  -- all force-loaded), so we never cross an unloaded chunk. baseZ: the base chunk's row is z <= -2241.
+  hubZ = -2232, baseZ = -2241,
   laneUp = 6,                               -- turtle n travels at (chest top + laneUp + n)
   protect = { x1 = -96, x2 = -81, z1 = -2256, z2 = -2241, y1 = 240 },   -- the base chunk: never break blocks here
   fuelTarget = 3000,                        -- fill up to this at the fuel chest (the bottom is a long way down)
@@ -282,6 +292,11 @@ local function goTo(x, y, z, yFirst, noDig)
   for _ = 1, 4 do
     local ok = true
     if yFirst then ok, why = vert(y, noDig) end
+    -- up in the air going somewhere else: along the force-loaded row first (unless it's base-to-base)
+    local air = CONF.fuelChest.y + 2
+    if ok and P.y > air and y > air and P.x ~= x and not (P.z <= CONF.baseZ and z <= CONF.baseZ) then
+      ok, why = horiz("z", CONF.hubZ, noDig)
+    end
     if ok then ok, why = horiz("x", x, noDig) end
     if ok then ok, why = horiz("z", z, noDig) end
     if ok then ok, why = vert(y, noDig) end
@@ -300,8 +315,10 @@ local function oldChunkOf(n)                   -- how the older code numbered th
   local g, r = math.floor((n - 1) / 8), (n - 1) % 8
   return g * 4 + (r % 4) + 1, r >= 4
 end
-local function corner(c)                       -- chunks run 2 wide, going south
-  return { x = CONF.quarry.x + ((c - 1) % 2) * 16, z = CONF.quarry.z + math.floor((c - 1) / 2) * 16 }
+CONF.lastChunk = #CONF.chunks
+local function corner(c)
+  local k = CONF.chunks[c] or CONF.chunks[1]
+  return { x = k.x, z = k.z }
 end
 local S                                        -- the column we go up and down in (our own corner)
 local EAST, SOUTH = false, false               -- which side of the chunk our corner is on
@@ -365,7 +382,8 @@ local function costHome()                      -- fuel to get back to the chests
   local d = dropDock()
   local up = math.abs(lane() - P.y)
   local across = inQ(P.x, P.z) and (math.abs(P.x - S.x) + math.abs(P.z - S.z)) or 0
-  return across + up + math.abs(S.x - d.x) + math.abs(S.z - d.z) + (lane() - DOCKY) + 150
+  return across + up + math.abs(S.x - d.x) + math.abs(S.z - CONF.hubZ) + math.abs(CONF.hubZ - d.z) +
+    (lane() - DOCKY) + 150
 end
 
 -- ---------------------------------------------------------- the chests (one turtle at a time)

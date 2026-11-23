@@ -473,12 +473,15 @@ local function draw()
   local cs = {}
   for c in pairs(PLAN) do cs[#cs + 1] = c end
   table.sort(cs)
-  local line = ""
+  local line, finished = "", 0
   for _, c in ipairs(cs) do
     local d, _, tot = progress(c)
-    line = line .. " " .. c .. ":" .. math.floor(d * 100 / tot)
+    if d >= tot then finished = finished + 1                   -- (finished chunks are just counted)
+    else line = line .. " " .. c .. ":" .. math.floor(d * 100 / tot) end
   end
-  if line ~= "" then print("Done%" .. line) end
+  if line ~= "" or finished > 0 then
+    print("Done%" .. line .. (finished > 0 and ("  (" .. finished .. " chunks finished)") or ""))
+  end
   term.setTextColour(colors.white)
   local busy = {}
   for d, l in pairs(locks) do busy[#busy + 1] = d .. "=" .. l.n end

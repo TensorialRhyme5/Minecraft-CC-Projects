@@ -121,6 +121,10 @@ take turns at the chests (the mine computer gives out the turns).
   On first boot it finds the drop-off chests and the fuel chest (the wooden chest holding only coal).
 - **Updating:** U on the mine computer's Turtles tab looks up the newest version on GitHub, hands it to every turtle
   and restarts the mine computer too - new code is picked up right away (no 5-minute wait).
+- **Chunk list / route:** `CONF.chunks` in miner.lua lists every chunk to mine (4 per 2x2: NW, NE, SW, SE): chunks
+  1-8 are the first two 2x2s, 9-12 the 2x2 west of the first one (x -128..-97), 13-16 the 2x2 east (x -64..-33).
+  In the air, turtles always fly along the row z -2240..-2225 first (`CONF.hubZ`), which is force-loaded from
+  x -128 to -33 and joins the base chunk, so they never pass through an unloaded chunk.
 - **Turtle numbers / groups:** turtle n works in group (n-1)%4+1, three to a chunk: 1 5 9 on chunk 1, 2 6 10 on chunk 2,
   3 7 11 on chunk 3, 4 8 12 on chunk 4 (13-16 would be a 4th per chunk). The mine computer keeps the plan
   (`mine_plan.txt`) and hands out one 3-block layer at a time, top to bottom, so turtles sharing a chunk never dig the
