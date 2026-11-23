@@ -1287,7 +1287,7 @@ do
     if next(smeltN) and SM.rescan then SM.rescan() end
     for id, n in pairs(smeltN) do SM.add(id, n) end
     if next(SM.asks) and UI.panel ~= "smelt" and not SM.shown then
-      SM.shown = true; UI.panel = "smelt"
+      SM.shown = true; UI.panel = "smelt"; UI.smPage = nil
       if speaker then pcall(speaker.playNote, "pling", 1, 12) end
     end
     if not next(SM.asks) then SM.shown = nil end
@@ -1297,6 +1297,7 @@ do
 
   -- the question on the storage screen
   function SM.drawPanel()
+    if UI.smPage == "storage" then return SM.drawFromStorage() end
     text(RX1, 6, "SMELT THESE?", YELLOW)
     text(RX1, 7, fit(#SM.furnaces .. " furnaces (" .. (SM.nBlast or 0) .. " blast)", RX2 - RX1 - 17), GRAY)
     if data.smeltStop then
@@ -1358,13 +1359,73 @@ do
     ry = ry + 1
     if #rules == 0 then text(RX1, ry, "none", GRAY) end
     for _, e in ipairs(rules) do
-      if ry > H - 4 then break end
+      if ry > H - 6 then break end
       text(RX1, ry, e.r == "always" and "SMELT" or "STORE", e.r == "always" and CYAN or RED)
       text(RX1 + 6, ry, fit(nameOf(e.id), RX2 - RX1 - 9), WHITE)
       button("smx" .. e.id, RX2 - 2, ry, RX2, ry, "X", WHITE, RED, function() data.smeltRule[e.id] = nil; dirty = true end)
       ry = ry + 1
     end
+    button("smfrom", RX1, H - 5, RX2, H - 5, "SMELT FROM STORAGE " .. string.char(16), BLACK, LIME,
+      function() UI.smPage = "storage"; UI.smTop = 0 end)
     button("smback", RX1, H - 3, RX2, H - 1, string.char(17) .. " BACK", BLACK, YELLOW, function() UI.panel = nil end)
+  end
+
+  -- second page: pick anything already in storage and smelt it (ores first)
+  local function isOre(id)
+    return id:find("_ore$") or id:find("_ore_") or id:find(":ore_") or id:find(":raw_") or id:find("_raw_")
+      or id:find("dust$") or id:find("crushed") or id:find("ancient_debris")
+  end
+  function SM.drawFromStorage()
+    text(RX1, 6, "SMELT FROM STORAGE", YELLOW)
+    button("smflt", RX2 - 12, 6, RX2, 6, UI.smAll and "SHOW: ALL" or "SHOW: ORES", BLACK, CYAN,
+      function() UI.smAll = not UI.smAll; UI.smTop = 0 end)
+    if not SM.active() then
+      text(RX1, 8, "No furnaces found on the network.", RED)
+    else
+      local list = {}
+      for id, e in pairs(byName) do
+        if e.count > 0 and not id:find("@") and SM.info(id) and (UI.smAll or isOre(id)) then
+          list[#list + 1] = { id = id, n = e.count, ore = isOre(id) and 1 or 0 }
+        end
+      end
+      table.sort(list, function(a, b)
+        if a.ore ~= b.ore then return a.ore > b.ore end
+        if a.n ~= b.n then return a.n > b.n end
+        return a.id < b.id
+      end)
+      text(RX1, 7, fit(#list == 0 and (UI.smAll and "nothing in storage can be smelted" or
+        "no ores in storage (SHOW: ALL for everything)") or "tap an amount to start smelting it", RX2 - RX1 + 1), GRAY)
+      local running = {}
+      for _, a in ipairs(SM.running()) do running[a.id] = a.left end
+      local per = math.max(1, math.floor((H - 5 - 9) / 2))
+      UI.smTop = math.max(0, math.min(UI.smTop or 0, math.max(0, #list - per)))
+      local y = 9
+      for i = UI.smTop + 1, math.min(#list, UI.smTop + per) do
+        local e = list[i]
+        local rc = SM.info(e.id)
+        local bg = (i % 2 == 0) and BLACK or GRAY
+        fill(RX1, y, RX2, y + 1, bg)
+        local tail = commas(e.n)
+        text(RX1, y, slide(nameOf(e.id), RX2 - RX1 - #tail - 1), WHITE, bg)
+        text(RX2 - #tail + 1, y, tail, CYAN, bg)
+        local outName = rc and R.name[rc.out] or "?"
+        local note = running[e.id] and ("smelting " .. commas(running[e.id])) or (string.char(26) .. " " .. outName)
+        text(RX1 + 1, y + 1, fit(note, RX2 - RX1 - 20), running[e.id] and ORANGE or LGRAY, bg)
+        local function go(k) return function() SM.add(e.id, math.min(k, e.n), rc) end end
+        button("sm64" .. e.id, RX2 - 17, y + 1, RX2 - 13, y + 1, "64", BLACK, LIME, go(64))
+        button("sm256" .. e.id, RX2 - 11, y + 1, RX2 - 6, y + 1, "256", BLACK, LIME, go(256))
+        button("small" .. e.id, RX2 - 4, y + 1, RX2, y + 1, "ALL", BLACK, ORANGE, go(e.n))
+        y = y + 2
+      end
+      if #list > per then
+        local hw = math.floor((RX2 - RX1) / 2)
+        button("smprev", RX1, H - 5, RX1 + hw - 1, H - 5, string.char(30) .. " PREV", BLACK, CYAN,
+          function() UI.smTop = math.max(0, (UI.smTop or 0) - per) end)
+        button("smnext", RX1 + hw + 1, H - 5, RX2, H - 5, "NEXT " .. string.char(31), BLACK, CYAN,
+          function() UI.smTop = (UI.smTop or 0) + per end)
+      end
+    end
+    button("smback", RX1, H - 3, RX2, H - 1, string.char(17) .. " BACK TO SMELTER", BLACK, YELLOW, function() UI.smPage = nil end)
   end
 end
 
