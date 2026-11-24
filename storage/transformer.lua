@@ -12,8 +12,12 @@
 -- ============================================================
 
 local PROTO = "storagetransform"
-local WAIT = 2              -- seconds between looks in the water
-local MAX_WAIT = 60         -- give up on a batch after this long
+-- AE2 only transforms an item after it has been in the water for over 60 ticks (3 s at 20 TPS), and the
+-- count restarts if the item is taken out. So never look before that: the first look is at 8 s (room for
+-- sinking in and some server lag), and each retry waits longer in case the server is running slow.
+local FIRST_WAIT = 8
+local MORE_WAIT = 4         -- each retry waits this much longer than the one before
+local MAX_WAIT = 75         -- give up on a batch after this long (the storage waits 90 s)
 
 local function log(...)
   local t = {}
@@ -172,8 +176,10 @@ local function handleJob(job)
   if not throwIn(need) then dumpAll(); return { type = "done", job = job.job, ok = false, err = "couldn't drop the ingredients in the water" } end
   -- wait for the transform, then fish it all out. Whole sets still left over go back in for another go.
   local made, waited, expect = 0, 0, (job.sets or 1) * (job.n or 1)
+  local wait = FIRST_WAIT
   while true do
-    sleep(WAIT); waited = waited + WAIT
+    sleep(wait); waited = waited + wait
+    wait = wait + MORE_WAIT
     if not fishOut() then break end
     local c = counts()
     made = c[job.out] or 0
