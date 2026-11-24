@@ -15,8 +15,8 @@ local CONF = {
   ground = 66,                                   -- y of the chests and of the bottom bamboo piece
   fuel = { x = 1320, z = -22299 },               -- the fuel chest (roughly: it is found exactly by being sat on)
   bamboo = { { x = 1318, z = -22300 }, { x = 1318, z = -22298 } },   -- bamboo chests 1 and 2 (roughly)
-  field = { x1 = 1314, x2 = 1326, z1 = -22335, z2 = -22305 },        -- corners (roughly)
-  margin = 3,                                    -- also check this many blocks around the field on the first lap
+  field = { x1 = 1313, x2 = 1326, z1 = -22336, z2 = -22295 },        -- corners (from Bryan, Nov 2026)
+  margin = 2,                                    -- also check this many blocks around the field on the first lap
   laneUp = 18,                                   -- turtle n flies at ground + laneUp + 2*(n-1) (bamboo tops out at +15)
   carry = 560,                                   -- go and drop off at this much bamboo (a full craft is 576)
   fuelLow = 1500, fuelTarget = 6000,
