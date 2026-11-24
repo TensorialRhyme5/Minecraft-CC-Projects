@@ -65,6 +65,17 @@ local function show()
   if LAST ~= "" then print(LAST) end
 end
 local function status(s, last) STATUS = s; if last then LAST = last end; show() end
+-- what we were doing, kept on disk: after a restart we can say what we were in the middle of
+local LOGFILE = "bamboo_log.txt"
+local function phase(p) local h = fs.open(LOGFILE, "w"); h.write("phase " .. p); h.close() end
+local function lastStop()
+  if not fs.exists(LOGFILE) then return nil end
+  local h = fs.open(LOGFILE, "r"); local t = h.readAll() or ""; h.close()
+  if t:find("^error ") then return "Last stop: " .. t:sub(7) end
+  if t:find("^phase ") then return "Last stop: restarted while " .. t:sub(7) .. " (no error: server restart or chunk unloaded?)" end
+  return nil
+end
+local LASTSTOP = lastStop()
 
 -- ---------------------------------------------------------- fuel chest (we're sitting on it)
 local function onFuelChest()
@@ -391,6 +402,7 @@ end
 local function setup(keepN)
   term.clear(); term.setCursorPos(1, 1)
   print("BAMBOO FARM setup")
+  if LASTSTOP then print(LASTSTOP); print("") end
   if not turtle.craft then error("I need a crafting table on one side (a CRAFTY turtle).", 0) end
   local okB, below = turtle.inspectDown()
   local onFuel = okB and isChest(below.name)
@@ -421,7 +433,7 @@ local function setup(keepN)
         end
       end
     end
-    if fs.exists(POSFILE) then fs.delete(POSFILE) end
+    -- (keep our saved position: if we stopped mid-setup, a reboot can still fly us home)
     error("", 0)
   end
   local n = keepN
@@ -445,13 +457,24 @@ local function setup(keepN)
   P = { x = F.x, y = G + 1, z = F.z, f = 0 }
   J.n = n
   saveJob(); savePos()                                         -- (if we stop mid-setup we fly back here and start over)
+  phase("setting up (leaving the fuel chest)")
   print("Leaving the fuel chest...")
   while not vert(lane(), 20) do print("Something above me, waiting..."); sleep(5) end
+  phase("setting up (working out which way I face)")
   print("Working out which way I'm facing...")
   local Fd = CONF.field
-  local cx, cz = math.floor((Fd.x1 + Fd.x2) / 2), math.floor((Fd.z1 + Fd.z2) / 2)
-  local sx, sz = math.max(1, math.floor(math.abs(Fd.x2 - Fd.x1) / 2) - 3), math.max(1, math.floor(math.abs(Fd.z2 - Fd.z1) / 2) - 3)
-  local spots = { { cx, cz }, { cx - sx, cz - sz }, { cx + sx, cz - sz }, { cx - sx, cz + sz }, { cx + sx, cz + sz } }
+  -- 5 spots at the end of the field nearest the fuel chest (staying close keeps us in loaded chunks)
+  local zlo, zhi = math.min(Fd.z1, Fd.z2), math.max(Fd.z1, Fd.z2)
+  local xlo, xhi = math.min(Fd.x1, Fd.x2), math.max(Fd.x1, Fd.x2)
+  local cx, cz = math.floor((xlo + xhi) / 2), math.floor((zlo + zhi) / 2)
+  local spots
+  if F.z > zhi or F.z < zlo then
+    local e, d = (F.z > zhi) and zhi or zlo, (F.z > zhi) and -1 or 1
+    spots = { { cx, e + 5 * d }, { cx - 3, e + 6 * d }, { cx + 3, e + 6 * d }, { cx - 3, e + 10 * d }, { cx + 3, e + 10 * d } }
+  else
+    local e, d = (F.x > xhi) and xhi or xlo, (F.x > xhi) and -1 or 1
+    spots = { { e + 5 * d, cz }, { e + 6 * d, cz - 3 }, { e + 6 * d, cz + 3 }, { e + 10 * d, cz - 3 }, { e + 10 * d, cz + 3 } }
+  end
   local g, found = 0, nil
   local function regard(newG)                                  -- where we really are if we started facing newG
     local dx, dz = P.x - F.x, P.z - F.z
@@ -484,6 +507,7 @@ local function setup(keepN)
   print("I started out facing " .. ({ "north", "east", "south", "west" })[found + 1] .. ".")
 
   -- find the two bamboo chests near the fuel chest: chests holding nothing but bamboo / bamboo blocks
+  phase("setting up (looking for the bamboo chests)")
   print("Looking for the bamboo chests...")
   local found2 = {}
   local SY = G + 5
@@ -593,7 +617,20 @@ if onFuelChest() then
   if fs.exists(JOBFILE) then fs.delete(JOBFILE) end
   P, J = nil, nil
 end
-if not (J and J.chests and P) then setup(keepN) end
-J.cols = buildColumns(J.n)
-show()
-work()
+local okMain, errMain = pcall(function()
+  if not (J and J.chests and P) then setup(keepN) end
+  J.cols = buildColumns(J.n)
+  phase("working")
+  if LASTSTOP then LAST = LASTSTOP end
+  show()
+  work()
+end)
+if not okMain then
+  local msg = tostring(errMain)
+  if msg ~= "" and msg ~= "Terminated" then
+    local h = fs.open(LOGFILE, "w"); h.write("error " .. msg); h.close()
+  else
+    phase("stopped")
+  end
+  error(errMain, 0)
+end
