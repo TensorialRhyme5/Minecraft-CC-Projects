@@ -194,6 +194,17 @@ def parse_recipe(rid, j):
     double = False
     if t in CRAFT_TYPES:
         t = 'minecraft:crafting_shaped' if ('pattern' in j and 'key' in j) else 'minecraft:crafting_shapeless'
+    if t == 'ae2:transform':
+        # AE2 in-world transform: throw the ingredients into water. Only the water ones are kept (the
+        # storage's transformer turtle sits over a water hole); lava / explosion transforms are skipped.
+        circ = j.get('circumstance') or {'type': 'fluid', 'tag': 'minecraft:water'}
+        if circ.get('type') != 'fluid' or circ.get('tag') not in ('minecraft:water', 'c:water'):
+            return None
+        out, n = norm_result(j.get('result'))
+        ings = [norm_ing(i) for i in j.get('ingredients', [])]
+        if not out or not ings or None in ings or len(ings) > 9:
+            return None
+        return {'id': rid, 'k': 'w', 'out': out, 'n': n, 'i': ings}
     if t in ('minecraft:smelting', 'minecraft:blasting', 'smelting', 'blasting'):
         ing = norm_ing(j.get('ingredient'))
         out, n = norm_result(j.get('result'))
@@ -305,10 +316,10 @@ WOOD_ITEM = re.compile(r'^sophisticatedstorage:((copper|iron|gold|diamond|nether
 
 def split_by_wood():
     def cells(r):
-        return r['g'] if r['k'] == 's' else r['i'] if r['k'] == 'l' else [r['c']]
+        return r['g'] if r['k'] == 's' else r['i'] if r['k'] in ('l', 'w') else [r['c']]
     def set_cells(r, c):
         if r['k'] == 's': r['g'] = c
-        elif r['k'] == 'l': r['i'] = c
+        elif r['k'] in ('l', 'w'): r['i'] = c
         else: r['c'] = c[0]
     def woody(cell):
         return cell and any(WOOD_ITEM.match(o) for o in cell)

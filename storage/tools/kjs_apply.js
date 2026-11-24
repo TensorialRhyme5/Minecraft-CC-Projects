@@ -88,10 +88,11 @@ function matches(r, f) {
         case 'input': return ingHas(r, pv);
         case 'type': {
           const t = String(pv);
-          const full = { s: 'minecraft:crafting_shaped', l: 'minecraft:crafting_shapeless', f: 'minecraft:smelting', b: 'minecraft:blasting' }[r.k];
+          const full = { s: 'minecraft:crafting_shaped', l: 'minecraft:crafting_shapeless', f: 'minecraft:smelting', b: 'minecraft:blasting', w: 'ae2:transform' }[r.k];
           if (pv instanceof RegExp) return pv.test(full);
           if (r.k === 'f') return /smelting$/.test(t);
           if (r.k === 'b') return /blasting$/.test(t);
+          if (r.k === 'w') return /transform$/.test(t);
           return r.k === 's' ? /crafting_shaped$|shaped/.test(t) : /shapeless/.test(t);
         }
         default: return false;

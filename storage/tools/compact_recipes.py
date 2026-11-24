@@ -84,7 +84,7 @@ for r in d['recipes']:
     else:
         g = [ing(c) for c in r['i']]
         if None in g: skipped += 1; continue
-        body = 'l\t' + ','.join(map(str, sorted(g)))
+        body = ('w' if r['k'] == 'w' else 'l') + '\t' + ','.join(map(str, sorted(g)))   # w = AE2 water transform
     key = (out, r['n'], body)
     if key in seen: continue
     seen.add(key)

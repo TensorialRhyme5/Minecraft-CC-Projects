@@ -51,6 +51,23 @@ reboot
 Then `CRAFT` on a recipe sends the ingredients to the barrel, the turtle lays out the grid and crafts, and the finished
 items land in the barrel (up to 64 crafts per turtle run, big orders run several times).
 
+**Water recipes (transformer turtle):** AE2-style "throw it in water" recipes have no crafting table, so a second turtle
+does them: **Redstone Crystal** (Applied Flux: Redstone Block + Fluix Crystal + Glowstone Dust → 2), **Fluix Crystal**,
+**Certus Quartz Crystal**, the **budding quartz** upgrades and ExtendedAE's **Entro Crystal / Entro Ingot**.
+Any turtle works (no crafting table needed). Put it touching the pickup barrel (in front, on top or beside it), a
+full-block wired modem against it, and **one still water source right under it**, walled in on all four sides so
+nothing floats off. On the turtle:
+
+```
+wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/transformer_startup.lua startup.lua
+reboot
+```
+
+These recipes show up in `RECIPES` marked "(thrown in water)". `CRAFT` sends the ingredients to the barrel, the
+turtle drops them in the water, fishes the result out and leaves it in the barrel (up to 64 sets per run). Crafting
+chains use it too: anything that needs a Redstone Crystal or Fluix Crystal shows that slot green and makes it as a step.
+Lava and explosion transforms (Sky Steel, Entangled Singularity) aren't done.
+
 ```
 wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/storage/startup.lua startup.lua
 reboot

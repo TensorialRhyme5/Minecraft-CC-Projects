@@ -15,3 +15,6 @@ python3 compact_recipes.py final.json ../recipes.txt
 Crafting-table (3x3 shaped/shapeless) recipes become R lines (including mods' own crafting-table types listed in
 `CRAFT_TYPES`, e.g. Mekanism and Sophisticated Storage tier upgrades) and furnace / blast furnace recipes become S lines
 (`S out count f|b group`). Other machine recipes are skipped.
+AE2 water transforms (`ae2:transform` in water, e.g. Redstone Crystal, Fluix Crystal) become R lines of kind `w`, done by
+the transformer turtle. To add them to an existing `recipes.txt` without a full rebuild, unzip the AE-family jars
+(recipes and item tags) and run `python3 add_transforms.py ../recipes.txt <unzipped jar folders...>` (safe to re-run).

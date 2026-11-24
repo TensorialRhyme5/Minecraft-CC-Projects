@@ -1933,7 +1933,59 @@ local function arrangePickup(pk, need)
 end
 
 local jobCounter = 0
+-- ---------------------------------------------------------- transformer: AE2 water recipes (rc.k == "w")
+-- A plain turtle over a water source, touching the pickup barrel (storage/transformer.lua). The ingredients
+-- go to the barrel, the turtle throws them in the water and puts the result back in the barrel.
+do                                                  -- (in a block: the main chunk is at Lua's 200-local limit)
+local TPROTO = "storagetransform"
+local function findTransformer()
+  if not openNet() then return nil end
+  local id = rednet.lookup(TPROTO)
+  if type(id) == "table" then id = id[1] end
+  return id
+end
+function SM.transformCraft(t)
+  local id = findTransformer()
+  if not id then return 0, "no transformer turtle found (a turtle over water running transformer.lua)" end
+  local remaining, made = t.crafts, 0
+  while remaining > 0 do
+    scan()
+    local pk = currentPickup()
+    if not pk then return made, "no barrel connected" end
+    local k, _, used = biggestBatch(t.rc, remaining)
+    if k == 0 then return made, made > 0 and "ran out of ingredients" or "missing ingredients" end
+    busy = (t.step or "") .. "In the water: " .. t.name .. "  " .. (t.crafts - remaining) .. "/" .. t.crafts
+    local need, items = {}, {}
+    SM.tried = {}
+    for it, n in pairs(used) do
+      local rid = SM.realId(R.id[it])
+      local got = retrieve(R.id[it], n)
+      need[rid] = (need[rid] or 0) + n
+      if got < n then sleep(0.1); scan(); got = got + retrieve(R.id[it], n - got) end
+      if got < n then SM.giveBack(need); return made, SM.whyShort(R.id[it], currentPickup(), n, got) end
+      items[#items + 1] = { name = rid, n = n }
+    end
+    if not arrangePickup(pk, need) then SM.giveBack(need); return made, "pickup is too full to sort" end
+    jobCounter = jobCounter + 1
+    rednet.send(id, { type = "transform", job = jobCounter, items = items, sets = k, n = t.rc.n, out = SM.realId(R.id[t.out]) }, TPROTO)
+    local deadline = os.clock() + 90 + k
+    local reply
+    repeat
+      local from, msg = rednet.receive(TPROTO, math.max(0.1, deadline - os.clock()))
+      if from == id and type(msg) == "table" and msg.type == "done" and msg.job == jobCounter then reply = msg end
+    until reply or os.clock() >= deadline
+    if not reply then SM.giveBack(need); return made, "the transformer turtle didn't answer" end
+    if not reply.ok then SM.giveBack(need); return made, reply.err or "transform failed" end
+    made = made + (reply.made or 0)
+    remaining = remaining - k
+    if reply.made and reply.made < k * (t.rc.n or 1) then SM.giveBack(need) end   -- unused leftovers back to storage
+  end
+  return made
+end
+end
+
 local function autoCraft(t)
+  if t.rc and t.rc.k == "w" then return SM.transformCraft(t) end
   local id = findCrafter(true)
   if not id then return 0, "no crafter turtle found on the network" end
   local remaining, made = t.crafts, 0
@@ -2825,7 +2877,7 @@ local function drawRecipe()
   if hasBack then
     button("rback", RX2 - 7, 6, RX2, 6, string.char(17) .. " BACK", BLACK, YELLOW, goBack)
   end
-  text(RX1, 7, "makes " .. rc.n .. (rc.k == "l" and "  (shapeless)" or ""), LGRAY, PANEL)
+  text(RX1, 7, "makes " .. rc.n .. (rc.k == "l" and "  (shapeless)" or rc.k == "w" and "  (thrown in water)" or ""), rc.k == "w" and CYAN or LGRAY, PANEL)
   if #list > 1 then
     local lbl = UI.rvar .. "/" .. #list
     text(RX2 - 9 - #lbl, 7, lbl, LGRAY, PANEL)
