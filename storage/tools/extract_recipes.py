@@ -33,7 +33,7 @@ DOUBLES = set()   # items that also have a "double" version (Sophisticated Stora
 tags = {}         # tag -> {'values': [...]}
 names = {}
 mods_loaded = set(EXTRA_MODS)
-stats = {'bad': 0, 'cond_skip': 0}
+stats = {'bad': 0, 'cond_skip': 0, 'variant_in': 0, 'variant_out': 0}
 
 
 def modids_of(z):
@@ -139,6 +139,11 @@ def norm_ing(x):
                 out += o
         return out or None
     if isinstance(x, dict):
+        t = x.get('type', '')
+        if isinstance(t, str) and 'fluid' in t:     # "1000 mB of water": a filled bucket does it (compact picks the bucket)
+            f = x.get('fluid') if isinstance(x.get('fluid'), dict) else x.get('value') if isinstance(x.get('value'), dict) else x
+            tag = f.get('tag') or f.get('Tag') or f.get('fluid') or f.get('Fluid')
+            return ['~fluid:' + tag] if isinstance(tag, str) else None
         if 'item' in x:
             return [x['item']]
         if 'tag' in x:
@@ -155,6 +160,61 @@ def norm_ing(x):
         if 'value' in x:
             return norm_ing(x['value'])
     return None
+
+
+# ---- item variants. The storage only knows item ids, so it can't tell apart items that share an id but
+# differ in data components (Ender IO conduit types, Reliquary mob charm fragments, Productive Bees eggs,
+# Patchouli books, IE blueprints...). Recipes that need a particular variant as an input, or that make one
+# of several variants of an item, are left out: the storage would grab or promise the wrong one.
+VARIANT_IN_TYPES = {'neoforge:components', 'productivebees:component'}
+COSMETIC = {'sophisticatedstorage:wood_type',            # handled: every wood gets its own entry
+            'minecraft:hide_additional_tooltip', 'minecraft:item_name', 'minecraft:custom_name',
+            # only the colour differs (CC floppy disks, SecurityCraft lenses, Create Submarine floaters)
+            'minecraft:dyed_color', 'minecraft:custom_model_data', 'minecraft:block_state'}
+
+
+# an ingredient that only lists an item's default components just means "a plain, untouched item"
+DEFAULT_COMPONENTS = {'minecraft:attribute_modifiers', 'minecraft:enchantments', 'minecraft:lore',
+                      'minecraft:max_stack_size', 'minecraft:rarity', 'minecraft:repair_cost'}
+
+
+def needs_variant(x):
+    if isinstance(x, dict):
+        c = x.get('components')
+        plain = isinstance(c, dict) and set(c) <= DEFAULT_COMPONENTS
+        if not plain and (x.get('type') in VARIANT_IN_TYPES or c is not None or 'nbt' in x):
+            return True
+        return any(needs_variant(v) for v in x.values())
+    if isinstance(x, list):
+        return any(needs_variant(v) for v in x)
+    return False
+
+
+def result_variant(r):
+    if isinstance(r, dict) and isinstance(r.get('components'), dict):
+        c = {k: v for k, v in r['components'].items() if k not in COSMETIC}
+        return json.dumps(c, sort_keys=True) if c else None
+    return None
+
+
+def self_upgrade(r):
+    """Turtle + Diamond Pickaxe -> Turtle: storage.lua gives these their own entry ("Mining Turtle"), so they stay"""
+    cells = r.get('g') or r.get('i') or []
+    return any(c == [r['out']] for c in cells)
+
+
+def drop_ambiguous_variants():
+    by_out = {}
+    for rid, r in recipes.items():
+        by_out.setdefault(r['out'], []).append(rid)
+    for out, rids in by_out.items():
+        sigs = {recipes[x].get('vc') for x in rids}
+        if len(sigs) > 1:                       # several variants (or plain + variant) share this id
+            for x in rids:
+                if recipes[x].get('vc') and not self_upgrade(recipes[x]):
+                    del recipes[x]; stats['variant_out'] += 1
+    for r in recipes.values():
+        r.pop('vc', None)
 
 
 def result_wood(r):
@@ -188,12 +248,25 @@ CRAFT_TYPES = {
 
 
 def parse_recipe(rid, j):
+    if j.get('type') == 'mcjtylib:copy_components' and isinstance(j.get('recipe'), dict):
+        j = j['recipe']          # RFTools wraps a normal crafting-table recipe (copies data across on craft)
     t = str(j.get('type', ''))
     if t in CRAFT_TYPES and rid.startswith('sophisticatedstorage:double_'):
         return None        # double chests are upgrades of chests that are already double; left out to keep things simple
     double = False
     if t in CRAFT_TYPES:
         t = 'minecraft:crafting_shaped' if ('pattern' in j and 'key' in j) else 'minecraft:crafting_shapeless'
+    r = parse_recipe_inner(rid, j, t, double)
+    if r and needs_variant([j.get(k) for k in ('key', 'ingredients', 'ingredient')]):
+        stats['variant_in'] += 1
+        return None
+    vc = result_variant(j.get('result') or j.get('output'))
+    if r and vc:
+        r['vc'] = vc
+    return r
+
+
+def parse_recipe_inner(rid, j, t, double):
     if t == 'ae2:transform':
         # AE2 in-world transform: throw the ingredients into water. Only the water ones are kept (the
         # storage's transformer turtle sits over a water hole); lava / explosion transforms are skipped.
@@ -391,6 +464,7 @@ def main():
 
     for x in DOUBLES:
         names[x + '@double'] = 'Double ' + names.get(x, x.split(':')[-1].replace('_', ' ').title())
+    drop_ambiguous_variants()
     split_by_wood()
     json.dump({'recipes': list(recipes.values()), 'tags': tags, 'names': names,
                'mods': sorted(mods_loaded)}, open(OUT, 'w'))

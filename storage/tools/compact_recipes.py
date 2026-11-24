@@ -42,12 +42,25 @@ def tag(t):
         tidx[t] = len(tags) + 1; tags.append(t)
     return tidx[t]
 
+# a fluid ingredient ("~fluid:c:creosote") is filled by that fluid's bucket, if the pack has one
+BUCKETS = {}
+for k in names:
+    if k.endswith('_bucket'): BUCKETS.setdefault(k.split(':', 1)[1][:-len('_bucket')], []).append(k)
+def bucket(f):
+    x = f.split(':')[-1].split('/')[-1]
+    b = 'minecraft:%s_bucket' % x
+    return b if b in names else (sorted(BUCKETS.get(x, [])) or [None])[0]
 ings, gidx = [], {}
 def ing(opts):
     toks = []
     for o in opts:
         if o == '*': continue
-        if o.startswith('#'): tk = 't%d' % tag(ns(o[1:]))
+        if o.startswith('~fluid:'):
+            o = bucket(o[len('~fluid:'):])
+            if not o: continue
+        if o.startswith('#'):
+            if not resolve(ns(o[1:])): continue     # a tag nothing in the pack is in (e.g. from a mod that isn't installed)
+            tk = 't%d' % tag(ns(o[1:]))
         else: tk = str(item(o))
         if tk not in toks: toks.append(tk)
     key = ','.join(toks)
@@ -55,6 +68,34 @@ def ing(opts):
     if key not in gidx:
         gidx[key] = len(ings) + 1; ings.append(key)
     return gidx[key]
+
+# ---- item variants written by KubeJS as "id[component=...]". The storage only knows item ids, so a recipe
+# that needs a particular variant as an input is left out, and so is one that makes a variant of an item
+# that also has other recipes (it would look like it makes the plain item). Colour/name-only data is fine.
+COSMETIC = {'custom_name', 'item_name', 'hide_additional_tooltip', 'dyed_color', 'custom_model_data', 'block_state',
+            'in_water'}   # Aquaculture's "in water right now" flag: false for any tool sitting in storage
+def data_keys(s):
+    m = re.search(r'\[(.*)\]\s*$', s.strip())
+    if not m: return set()
+    return {k.split(':')[-1] for k in re.findall(r'(?:^|,)\s*([a-z0-9_.:-]+)\s*=', m.group(1))} or {'?'}
+def opts_of(r):
+    if r['k'] in ('f', 'b'): return [r['c']]
+    return [c for c in (r.get('g') if r['k'] == 's' else r.get('i')) or [] if c]
+variants = 0
+keep = []
+by_out = {}
+for r in d['recipes']:
+    if any('[' in o and data_keys(o) - COSMETIC for c in opts_of(r) for o in c):
+        variants += 1; continue
+    r['_v'] = bool(data_keys(r['out']) - COSMETIC)
+    by_out.setdefault(strip(r['out']), []).append(r)
+    keep.append(r)
+for rs in by_out.values():
+    if len(rs) > 1 and any(x['_v'] for x in rs):
+        for x in rs:
+            if x['_v'] and not any(c == [x['out']] or [strip(o) for o in c] == [strip(x['out'])] for c in opts_of(x)):
+                x['_drop'] = True; variants += 1     # (self-upgrades like Turtle + Pickaxe -> Turtle stay)
+d['recipes'] = [r for r in keep if not r.get('_drop')]
 
 rlines = []
 slines = []
@@ -113,4 +154,4 @@ with open(OUT, 'w', newline='\n') as f:
     f.write('V\t1\t%d\t%d\t%d\t%d\n' % (len(items), len(tags), len(ings), len(rlines)))
     for block in (ilines, tlines, glines, rlines, slines):
         f.write('\n'.join(block) + '\n')
-print('items', len(items), 'tags', len(tags), 'ings', len(ings), 'recipes', len(rlines), 'cooking', len(slines), 'skipped', skipped)
+print('items', len(items), 'tags', len(tags), 'ings', len(ings), 'recipes', len(rlines), 'cooking', len(slines), 'skipped', skipped, 'variant', variants)
