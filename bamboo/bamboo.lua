@@ -379,6 +379,22 @@ local function setup()
   if not onFuel then
     print("Put me on TOP of the fuel chest (with coal or")
     print("charcoal in it) and reboot.")
+    print("")
+    if not okB then print("Under me: nothing (air).")
+    else
+      print("Under me: " .. tostring(below.name))
+      if not isChest(below.name) then print("That isn't a chest.")
+      else
+        local okL, l = pcall(peripheral.call, "bottom", "list")
+        if not okL or type(l) ~= "table" then print("I can't look inside it: " .. tostring(l))
+        else
+          local names, n = {}, 0
+          for _, it in pairs(l) do n = n + 1; if #names < 4 then names[#names + 1] = it.count .. "x " .. it.name end end
+          print(n == 0 and "It's empty." or ("It has: " .. table.concat(names, ", ")))
+          print("(It needs coal or charcoal in it.)")
+        end
+      end
+    end
     if fs.exists(POSFILE) then fs.delete(POSFILE) end
     error("", 0)
   end
