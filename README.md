@@ -171,3 +171,33 @@ wired modem). Nothing moves by itself:
 - The mine drops the items into its dimensional chest (refilling it as home empties it); the home storage
   treats its dimensional chest as an input and puts everything away. Neither storage ever stores into them.
 - The mine computer needs an **ender modem** so home can reach it across dimensions.
+
+## Bamboo farm (bamboo/)
+
+Three **Advanced Crafty Mining Turtles** cut the bamboo field and turn it into **Bamboo Blocks**. Each turtle takes a
+strip (1 = west, 2 = middle, 3 = east), flies at its own height, cuts every stalk from the top down and always leaves
+the bottom piece so it grows back. Every 9 bamboo are crafted into a block on board and dropped in bamboo chest 1
+(chest 2 once 1 is full); the odd few left over are burned as fuel. Fuel comes from the fuel chest (coal/charcoal).
+
+Setup, one turtle at a time:
+1. The two bamboo chests must be empty (or hold only bamboo / bamboo blocks); the fuel chest needs coal or charcoal.
+2. Put the turtle **on top of the fuel chest**, then on it:
+   ```
+   wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/bamboo/bamboo_startup.lua startup.lua
+   reboot
+   ```
+3. Type its number (1, 2 or 3). It fuels up, works out which way it faces by flying over the field, finds the two
+   bamboo chests next to the fuel chest (its screen shows where), then starts. Its first lap also checks a few blocks
+   around the field, so the exact edges don't need to be known. Wait for it to fly off before placing the next one.
+
+The space above the field and the chests must be open (the turtles fly up to 22 blocks above the ground).
+Settings (field corners, heights, pause between laps) are in `CONF` at the top of `bamboo.lua`.
+
+**Status screen:** a computer with an advanced monitor (made for 4 wide x 3 tall). Put a full-block wired modem on each
+chest, cable them to the computer and right-click every modem so it shows red. Then on the computer:
+```
+wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/bamboo/screen_startup.lua startup.lua
+reboot
+```
+It shows the bamboo blocks in each chest, how full they are, blocks per hour and the fuel left. (The turtles have no
+modem - both sides are taken - so the screen watches the chests.)
