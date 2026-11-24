@@ -112,14 +112,23 @@ local function vert(y, patience)
   while P.y > y do if not step("d", patience) then return false end end
   return true
 end
+-- something solid in the way (a cliff, a tree)? go up over it, up to 30 blocks above our height
+local function forward(patience)
+  while true do
+    local ok, why = step("f", patience)
+    if ok then return true end
+    if why == "turtle" or why == "something" then return false end
+    if P.y >= lane() + 30 or not step("u", patience) then return false end
+  end
+end
 local function goXZ(x, z, patience)
   if P.x ~= x then
     turnTo(x > P.x and 1 or 3)
-    while P.x ~= x do if not step("f", patience) then return false end end
+    while P.x ~= x do if not forward(patience) then return false end end
   end
   if P.z ~= z then
     turnTo(z > P.z and 2 or 0)
-    while P.z ~= z do if not step("f", patience) then return false end end
+    while P.z ~= z do if not forward(patience) then return false end end
   end
   return true
 end
@@ -127,7 +136,7 @@ end
 local function goTo(x, y, z, patience)
   local L = lane()
   if P.y ~= L or P.x ~= x or P.z ~= z then
-    if not vert(L, patience) then return false end
+    vert(L, patience)                                          -- (may stop short, e.g. still above something we climbed)
     if not goXZ(x, z, patience) then return false end
   end
   return vert(y, patience)
@@ -307,15 +316,16 @@ end
 
 -- look straight down from our height without cutting anything: is there bamboo here?
 local function probe(x, z)
-  if not goTo(x, lane(), z, 30) then return false end
+  if not goTo(x, lane(), z, 30) then vert(lane(), 600); return false end
   while P.y - 1 > G do
     local ok = turtle.inspectDown()
     if ok then break end
     if not step("d", 30) then break end
   end
   local ok, b = turtle.inspectDown()
+  local topY = P.y - 1
   vert(lane(), 600)
-  return ok and isBamboo(b.name)
+  return ok and isBamboo(b.name) and topY >= G and topY <= G + 16
 end
 
 local function work()
@@ -331,7 +341,14 @@ local function work()
         local home = J.chests.fuel
         local need = math.abs(P.x - home.x) + math.abs(P.z - home.z) + 4 * (lane() - G) + 200
         if count("minecraft:bamboo") >= CONF.carry then dockTrip("Dropping off")
-        elseif turtle.getFuelLevel() < math.max(need, CONF.fuelLow) then dockTrip("Getting fuel") end
+        elseif turtle.getFuelLevel() < math.max(need, CONF.fuelLow) then
+          dockTrip("Getting fuel")
+          while turtle.getFuelLevel() < need do                -- couldn't get there: don't burn the rest flying about
+            status("Can't get to the fuel chest!", "Fuel " .. turtle.getFuelLevel() .. ". Trying again in a minute.")
+            sleep(60)
+            dockTrip("Getting fuel")
+          end
+        end
         status("Cutting bamboo")
         local r = harvest(c[1], c[2])
         if r then J.map[i] = r end
@@ -394,7 +411,8 @@ local function setup()
   print("Working out which way I'm facing...")
   local Fd = CONF.field
   local cx, cz = math.floor((Fd.x1 + Fd.x2) / 2), math.floor((Fd.z1 + Fd.z2) / 2)
-  local spots = { { cx, cz }, { cx - 3, cz + (Fd.z1 < Fd.z2 and -6 or 6) } }
+  local sx, sz = math.max(1, math.floor(math.abs(Fd.x2 - Fd.x1) / 2) - 3), math.max(1, math.floor(math.abs(Fd.z2 - Fd.z1) / 2) - 3)
+  local spots = { { cx, cz }, { cx - sx, cz - sz }, { cx + sx, cz - sz }, { cx - sx, cz + sz }, { cx + sx, cz + sz } }
   local g, found = 0, nil
   local function regard(newG)                                  -- where we really are if we started facing newG
     local dx, dz = P.x - F.x, P.z - F.z
@@ -402,12 +420,19 @@ local function setup()
     P.x, P.z, P.f = F.x + dx, F.z + dz, (P.f + newG - g) % 4
     g = newG
   end
+  local fits = {}
   for guess = 0, 3 do
     regard(guess)
-    if probe(spots[1][1], spots[1][2]) and probe(spots[2][1], spots[2][2]) then found = guess; break end
+    local all = true
+    for _, sp in ipairs(spots) do
+      if not probe(sp[1], sp[2]) then all = false; break end
+    end
+    if all then fits[#fits + 1] = guess end
   end
+  if #fits == 1 then found = fits[1]; regard(found) end
   if not found then
-    print("I couldn't find the bamboo field.")
+    print(#fits > 1 and "I found bamboo in more than one direction," or "I couldn't find the bamboo field.")
+    print("so I can't tell which way I'm facing.")
     print("Pick me up, put me back on the fuel chest, reboot.")
     if fs.exists(POSFILE) then fs.delete(POSFILE) end
     error("", 0)
@@ -505,6 +530,20 @@ if shell and shell.getRunningProgram and fs.exists("startup.lua") then
   end
 end
 
+-- picked up and put back on the fuel chest (lost, or out of fuel somewhere)? start over from here
+local function onFuelChest()
+  local ok, b = turtle.inspectDown()
+  if not (ok and isChest(b.name)) then return false end
+  local okL, l = pcall(peripheral.call, "bottom", "list")
+  if not (okL and type(l) == "table") then return false end
+  for _, it in pairs(l) do if isFuelItem(it.name) then return true end end
+  return false
+end
+if J and J.chests and P and onFuelChest() and not (P.x == J.chests.fuel.x and P.z == J.chests.fuel.z and P.y == G + 1) then
+  print("I'm sitting on the fuel chest: starting over.")
+  fs.delete(POSFILE); fs.delete(JOBFILE); P, J = nil, nil
+  sleep(1)
+end
 if not (J and J.chests and P) then setup() end
 J.cols = buildColumns(J.n)
 show()
