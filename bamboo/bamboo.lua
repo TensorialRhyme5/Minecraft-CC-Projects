@@ -442,6 +442,11 @@ local function setup(keepN)
     n = tonumber(read())
   end
   print("Turtle " .. n)
+  -- the quick way: the player says which way the turtle's face (the side with the screen) points
+  print("Which way does my FACE point (the side with")
+  print("the screen)? Look at your minimap compass.")
+  write("Type N, E, S or W (or just Enter = find out myself): ")
+  local told = ({ n = 0, e = 1, s = 2, w = 3 })[(read() or ""):sub(1, 1):lower()]
   J = { n = n, lap = 1, idx = 1, map = {}, made = 0, active = 1, cols = buildColumns(n) }
   os.setComputerLabel("Bamboo " .. n)
   -- fuel up for setup: checking all four directions (and climbing anything in the way) takes a lot
@@ -461,7 +466,7 @@ local function setup(keepN)
   print("Leaving the fuel chest...")
   while not vert(lane(), 20) do print("Something above me, waiting..."); sleep(5) end
   phase("setting up (working out which way I face)")
-  print("Working out which way I'm facing...")
+  print(told and "Facing as you told me." or "Working out which way I'm facing...")
   local Fd = CONF.field
   -- 5 spots at the end of the field nearest the fuel chest (staying close keeps us in loaded chunks)
   local zlo, zhi = math.min(Fd.z1, Fd.z2), math.max(Fd.z1, Fd.z2)
@@ -484,6 +489,7 @@ local function setup(keepN)
   end
   local fits = {}
   for guess = 0, 3 do
+    if told then fits = { told }; break end
     if turtle.getFuelLevel() < 2500 then                      -- top up between tries: the fuel chest is where
       goTo(F.x, G + 1, F.z)                                    -- we started, whichever way we really face
       fillUp()
