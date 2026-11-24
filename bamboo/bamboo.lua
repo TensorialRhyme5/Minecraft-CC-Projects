@@ -6,15 +6,16 @@
 --  grows back. Every 9 bamboo become a Bamboo Block (crafted on board) and
 --  go into bamboo chest 1 (chest 2 once 1 is full). Fuel comes from the
 --  fuel chest. Bamboo leftovers under 9 are burned as fuel.
---  Setup: put the turtle on TOP of the fuel chest and reboot. It works out
---  which way it faces, finds the two bamboo chests next to the fuel chest
---  and, on its first lap, maps exactly where the bamboo is.
+--  Setup: put the turtle on TOP of the fuel chest, turn it on, type its
+--  number. It checks which way it faces by looking for the bamboo chests
+--  (at known spots 2 blocks away) and, on its first lap, maps where the
+--  bamboo is.
 -- ============================================================
 
 local CONF = {
   ground = 66,                                   -- y of the chests and of the bottom bamboo piece
-  fuel = { x = 1320, z = -22299 },               -- the fuel chest (roughly: it is found exactly by being sat on)
-  bamboo = { { x = 1318, z = -22300 }, { x = 1318, z = -22298 } },   -- bamboo chests 1 and 2 (roughly)
+  fuel = { x = 1320, z = -22299 },               -- the fuel chest (exact: Bryan stood on each chest)
+  bamboo = { { x = 1318, z = -22300 }, { x = 1318, z = -22298 } },   -- bamboo chests 1 and 2 (exact)
   field = { x1 = 1313, x2 = 1326, z1 = -22336, z2 = -22295 },        -- corners (from Bryan, Nov 2026)
   margin = 2,                                    -- also check this many blocks around the field on the first lap
   laneUp = 18,                                   -- turtle n flies at ground + laneUp + 2*(n-1) (bamboo tops out at +15)
@@ -351,19 +352,6 @@ local function harvest(x, z)
   return found
 end
 
--- look straight down from our height without cutting anything: is there bamboo here?
-local function probe(x, z)
-  if not goTo(x, lane(), z, 30) then vert(lane(), 600); return false end
-  while P.y - 1 > G do
-    local ok = turtle.inspectDown()
-    if ok then break end
-    if not step("d", 30) then break end
-  end
-  local ok, b = turtle.inspectDown()
-  local topY = P.y - 1
-  vert(lane(), 600)
-  return ok and isBamboo(b.name) and topY >= G and topY <= G + 16
-end
 
 local function work()
   while true do
@@ -442,135 +430,68 @@ local function setup(keepN)
     n = tonumber(read())
   end
   print("Turtle " .. n)
-  -- the quick way: the player says which way the turtle's face (the side with the screen) points
-  print("Which way does my FACE point (the side with")
-  print("the screen)? Look at your minimap compass.")
-  write("Type N, E, S or W (or just Enter = find out myself): ")
-  local told = ({ n = 0, e = 1, s = 2, w = 3 })[(read() or ""):sub(1, 1):lower()]
   J = { n = n, lap = 1, idx = 1, map = {}, made = 0, active = 1, cols = buildColumns(n) }
   os.setComputerLabel("Bamboo " .. n)
-  -- fuel up for setup: checking all four directions (and climbing anything in the way) takes a lot
   fillUp()
   print("Fuel: " .. turtle.getFuelLevel())
-  if turtle.getFuelLevel() < 3000 then
-    error("Not enough fuel: I need 3000 to set up (about 40 coal/charcoal in the fuel chest).", 0)
+  if turtle.getFuelLevel() < 1000 then
+    error("Not enough fuel: put at least 15 coal or charcoal in the fuel chest.", 0)
   end
 
-  -- which way do we face? Leave the chest, then try each guess: fly over the middle of the field and
-  -- look down for bamboo (twice, at two spots). A wrong guess just means we were somewhere else.
-  local F = { x = CONF.fuel.x, z = CONF.fuel.z }
+  -- which way do we face? The chests are at known spots, so: hop over to where bamboo chest 1 and 2
+  -- should be (2 blocks away) and look down. Try each direction; only one should have both chests.
+  local F, B1, B2 = CONF.fuel, CONF.bamboo[1], CONF.bamboo[2]
   P = { x = F.x, y = G + 1, z = F.z, f = 0 }
   J.n = n
   saveJob(); savePos()                                         -- (if we stop mid-setup we fly back here and start over)
-  phase("setting up (leaving the fuel chest)")
-  print("Leaving the fuel chest...")
-  while not vert(lane(), 20) do print("Something above me, waiting..."); sleep(5) end
-  phase("setting up (working out which way I face)")
-  print(told and "Facing as you told me." or "Working out which way I'm facing...")
-  local Fd = CONF.field
-  -- 5 spots at the end of the field nearest the fuel chest (staying close keeps us in loaded chunks)
-  local zlo, zhi = math.min(Fd.z1, Fd.z2), math.max(Fd.z1, Fd.z2)
-  local xlo, xhi = math.min(Fd.x1, Fd.x2), math.max(Fd.x1, Fd.x2)
-  local cx, cz = math.floor((xlo + xhi) / 2), math.floor((zlo + zhi) / 2)
-  local spots
-  if F.z > zhi or F.z < zlo then
-    local e, d = (F.z > zhi) and zhi or zlo, (F.z > zhi) and -1 or 1
-    spots = { { cx, e + 5 * d }, { cx - 3, e + 6 * d }, { cx + 3, e + 6 * d }, { cx - 3, e + 10 * d }, { cx + 3, e + 10 * d } }
-  else
-    local e, d = (F.x > xhi) and xhi or xlo, (F.x > xhi) and -1 or 1
-    spots = { { e + 5 * d, cz }, { e + 6 * d, cz - 3 }, { e + 6 * d, cz + 3 }, { e + 10 * d, cz - 3 }, { e + 10 * d, cz + 3 } }
+  phase("setting up (checking which way I face)")
+  print("Checking which way I'm facing...")
+  local H = G + 3                                              -- low hop height, just above the chests
+  local function bambooChestBelow()
+    local okI, b = turtle.inspectDown()
+    if not (okI and isChest(b.name) and P.y == G + 1) then return false end
+    local okL, l = pcall(peripheral.call, "bottom", "list")
+    if not (okL and type(l) == "table") then return false end
+    for _, it in pairs(l) do
+      if it.name ~= "minecraft:bamboo" and it.name ~= "minecraft:bamboo_block" then return false end
+    end
+    return true
   end
-  local g, found = 0, nil
+  local function chestAt(c)
+    vert(H, 60)
+    if not goXZ(c.x, c.z, 20) then vert(H, 600); return false end
+    vert(G + 1, 60)
+    local yes = bambooChestBelow()
+    vert(H, 600)
+    return yes
+  end
+  local g = 0
   local function regard(newG)                                  -- where we really are if we started facing newG
     local dx, dz = P.x - F.x, P.z - F.z
     for _ = 1, (newG - g) % 4 do dx, dz = -dz, dx end
     P.x, P.z, P.f = F.x + dx, F.z + dz, (P.f + newG - g) % 4
     g = newG
   end
+  vert(H, 60)
   local fits = {}
   for guess = 0, 3 do
-    if told then fits = { told }; break end
-    if turtle.getFuelLevel() < 2500 then                      -- top up between tries: the fuel chest is where
-      goTo(F.x, G + 1, F.z)                                    -- we started, whichever way we really face
-      fillUp()
-      vert(lane(), 600)
-    end
     regard(guess)
-    local all = true
-    for _, sp in ipairs(spots) do
-      if not probe(sp[1], sp[2]) then all = false; break end
-    end
-    if all then fits[#fits + 1] = guess end
+    if chestAt(B1) and chestAt(B2) then fits[#fits + 1] = guess end
   end
-  if #fits == 1 then found = fits[1]; regard(found) end
-  if not found then
-    print(#fits > 1 and "I found bamboo in more than one direction," or "I couldn't find the bamboo field.")
-    print("so I can't tell which way I'm facing.")
-    print("Pick me up, put me back on the fuel chest, reboot.")
+  if #fits ~= 1 then
+    print(#fits == 0 and "I couldn't find both bamboo chests." or "Bamboo chests fit more than one way round.")
+    print("They should be at " .. B1.x .. " " .. G .. " " .. B1.z .. " and " .. B2.x .. " " .. G .. " " .. B2.z)
+    print("and hold nothing but bamboo / bamboo blocks.")
+    print("Put me back on the fuel chest to try again.")
     if fs.exists(POSFILE) then fs.delete(POSFILE) end
     error("", 0)
   end
-  print("I started out facing " .. ({ "north", "east", "south", "west" })[found + 1] .. ".")
-
-  -- find the two bamboo chests near the fuel chest: chests holding nothing but bamboo / bamboo blocks
-  phase("setting up (looking for the bamboo chests)")
-  print("Looking for the bamboo chests...")
-  local found2 = {}
-  local SY = G + 5
-  local function lowTo(x, z)                                   -- move at search height, over anything in the way
-    if P.y == SY and goXZ(x, z, 20) then return true end
-    return goTo(x, SY, z, 20)
-  end
-  for dx = -4, 4 do
-    for dz = -4, 4 do
-      if not (dx == 0 and dz == 0) then
-        local x, z = F.x + dx, F.z + dz
-        if lowTo(x, z) then
-          while P.y - 1 > G and not turtle.inspectDown() do if not step("d", 20) then break end end
-          local ok, b = turtle.inspectDown()
-          if ok and P.y - 1 == G and isChest(b.name) then
-            local okL, l = pcall(peripheral.call, "bottom", "list")
-            local clean = okL and type(l) == "table"
-            if clean then
-              for _, it in pairs(l) do
-                if it.name ~= "minecraft:bamboo" and it.name ~= "minecraft:bamboo_block" then clean = false end
-              end
-            end
-            if clean then found2[#found2 + 1] = { x = x, z = z, name = b.name } end
-          end
-          vert(SY, 600)
-        else
-          vert(lane(), 600)
-        end
-      end
-    end
-  end
-  local function d2(c, e) return (c.x - e.x) ^ 2 + (c.z - e.z) ^ 2 end
-  local picked = {}
-  for i, e in ipairs(CONF.bamboo) do
-    local best
-    for _, c in ipairs(found2) do
-      if not c.used then
-        local iron = c.name:find("iron", 1, true) and 0 or 100      -- the bamboo chests are Iron Chests
-        local key = iron + d2(c, e)
-        if not best or key < best.key then best = { c = c, key = key } end
-      end
-    end
-    if not best then
-      print("I only found " .. #picked .. " empty chest(s) for bamboo.")
-      print("Both bamboo chests must be empty (or hold only")
-      print("bamboo / bamboo blocks). Put me back on the fuel chest.")
-      if fs.exists(POSFILE) then fs.delete(POSFILE) end
-      error("", 0)
-    end
-    best.c.used = true
-    picked[i] = { x = best.c.x, z = best.c.z, what = "bamboo chest " .. i }
-  end
-  J.chests = { fuel = { x = F.x, z = F.z, what = "fuel chest" }, bamboo = picked }
+  regard(fits[1])
+  J.chests = { fuel = { x = F.x, z = F.z, what = "fuel chest" },
+    bamboo = { { x = B1.x, z = B1.z, what = "bamboo chest 1" }, { x = B2.x, z = B2.z, what = "bamboo chest 2" } } }
   saveJob(); savePos()
-  for i, c in ipairs(picked) do print("Bamboo chest " .. i .. ": " .. c.x .. " " .. G .. " " .. c.z) end
-  print("Fuel chest: " .. F.x .. " " .. G .. " " .. F.z)
-  sleep(3)
+  print("I started out facing " .. ({ "north", "east", "south", "west" })[fits[1] + 1] .. ". Off to work!")
+  sleep(2)
 end
 
 -- keep this turtle's startup.lua up to date

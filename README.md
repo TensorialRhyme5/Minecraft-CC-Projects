@@ -186,9 +186,10 @@ Setup, one turtle at a time:
    wget https://raw.githubusercontent.com/TensorialRhyme5/Minecraft-CC-Projects/main/bamboo/bamboo_startup.lua startup.lua
    reboot
    ```
-3. Type its number (1, 2 or 3). It fuels up, works out which way it faces by flying over the field, finds the two
-   bamboo chests next to the fuel chest (its screen shows where), then starts. Its first lap also checks a few blocks
-   around the field, so the exact edges don't need to be known. Wait for it to fly off before placing the next one.
+3. Turn it on (right-click) and type its number (1, 2 or 3). It fuels up, hops over to where the bamboo chests are
+   (2 blocks away) to check which way it faces, and goes to work - about a minute. Its first lap also checks a couple
+   of blocks around the field, so the exact edges don't need to be perfect. Wait for it to fly off before placing the
+   next one. A turtle put back on the fuel chest (or stopped mid-setup) starts over by itself.
 
 The space above the field and the chests must be open (the turtles fly up to 22 blocks above the ground).
 Settings (field corners, heights, pause between laps) are in `CONF` at the top of `bamboo.lua`.
