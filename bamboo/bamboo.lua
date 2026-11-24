@@ -17,7 +17,8 @@ local CONF = {
   fuel = { x = 1320, z = -22299 },               -- the fuel chest (exact: Bryan stood on each chest)
   bamboo = { { x = 1318, z = -22300 }, { x = 1318, z = -22298 } },   -- bamboo chests 1 and 2 (exact)
   field = { x1 = 1313, x2 = 1326, z1 = -22336, z2 = -22295 },        -- corners (from Bryan, Nov 2026)
-  margin = 2,                                    -- also check this many blocks around the field on the first lap
+  margin = 0,                                    -- extra blocks to check around the field (0: corners are measured;
+                                                 -- going past them can leave the force-loaded chunks)
   laneUp = 18,                                   -- turtle n flies at ground + laneUp + 2*(n-1) (bamboo tops out at +15)
   carry = 560,                                   -- go and drop off at this much bamboo (a full craft is 576)
   fuelLow = 1500, fuelTarget = 6000,
@@ -53,6 +54,7 @@ local isFuelItem = function(n) n = tostring(n); return n:find("coal", 1, true) ~
 
 -- ---------------------------------------------------------- screen
 local STATUS, LAST = "starting", ""
+local BLOCKED = nil
 local function show()
   term.clear(); term.setCursorPos(1, 1)
   print("BAMBOO FARM  turtle " .. tostring(J and J.n or "?"))
@@ -61,6 +63,7 @@ local function show()
   end
   print("Fuel " .. turtle.getFuelLevel())
   print("Blocks made " .. tostring(J and J.made or 0))
+  if P then print("I think I'm at " .. P.x .. " " .. P.y .. " " .. P.z .. " facing " .. ({ "N", "E", "S", "W" })[(P.f or 0) % 4 + 1]) end
   print("")
   print(STATUS)
   if LAST ~= "" then print(LAST) end
@@ -131,6 +134,7 @@ local function step(kind, patience)
       if ok and isBamboo(b.name) then
         dig()
       elseif ok and not isTurtle(b.name) then
+        BLOCKED = tostring(b.name):gsub("^minecraft:", "") .. " at " .. nx .. " " .. ny .. " " .. nz
         return false, b.name
       else                                                     -- a turtle, or a mob / player / item
         waited = waited + 1
@@ -236,13 +240,32 @@ local function dropAllBut(keep)
 end
 
 -- ---------------------------------------------------------- the chests (sat on from above, one turtle at a time)
+-- something is wrong that flying about won't fix: stay put and say so (also after a restart)
+local function giveUp(msg)
+  J.lost = msg; saveJob()
+  local h = fs.open("bamboo_log.txt", "w"); h.write("error " .. msg); h.close()
+  while true do
+    status("STOPPED: " .. msg, "Put me back on the fuel chest to start over.")
+    sleep(60)
+  end
+end
+
 local function atChest(c, fn)
   status("Going to the " .. c.what)
-  if not goTo(c.x, lane(), c.z) then return false end
+  local tries = 0
+  while not goTo(c.x, lane(), c.z) do
+    tries = tries + 1
+    if tries >= 5 then giveUp("I can't get to the " .. c.what .. ": blocked by " .. tostring(BLOCKED or "another turtle")) end
+    sleep(10)
+  end
   if not vert(G + 1, 2400) then vert(lane()); return false end   -- wait for a turtle that's using it
   local ok, b = turtle.inspectDown()
   local res = false
-  if ok and isChest(b.name) then res = fn() else LAST = "No chest under me at the " .. c.what .. "!" end
+  if ok and isChest(b.name) then res = fn()
+  else
+    giveUp("I'm lost: no chest under me where the " .. c.what .. " should be (" .. c.x .. " " .. G .. " " .. c.z ..
+      "). Under me: " .. (ok and tostring(b.name) or "air"))
+  end
   -- off the chest: straight up, or step aside first if a turtle is waiting on top of us
   if not vert(lane(), 6) then
     for f = 0, 3 do
@@ -375,8 +398,15 @@ local function work()
           end
         end
         status("Cutting bamboo")
+        BLOCKED = nil
         local r = harvest(c[1], c[2])
-        if r then J.map[i] = r end
+        if r then J.map[i] = r; J.fails = 0
+        elseif BLOCKED then                                    -- a block (overhang, cliff) over this spot: skip it for good
+          J.map[i] = 0; LAST = "Skipping " .. c[1] .. " " .. c[2] .. ": " .. BLOCKED
+        else
+          J.fails = (J.fails or 0) + 1
+          if J.fails >= 8 then giveUp("I can't reach my columns: blocked by " .. tostring(BLOCKED or "another turtle")) end
+        end
       end
       J.idx = i + 1; saveJob()
     end
@@ -545,7 +575,10 @@ if onFuelChest() then
   P, J = nil, nil
 end
 local okMain, errMain = pcall(function()
-  if not (J and J.chests and P) then setup(keepN) end
+  if J and J.lost then
+  while true do status("STOPPED: " .. J.lost, "Put me back on the fuel chest to start over."); sleep(60) end
+end
+if not (J and J.chests and P) then setup(keepN) end
   J.cols = buildColumns(J.n)
   phase("working")
   if LASTSTOP then LAST = LASTSTOP end
