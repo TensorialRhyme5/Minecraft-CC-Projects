@@ -66,6 +66,29 @@ local function show()
 end
 local function status(s, last) STATUS = s; if last then LAST = last end; show() end
 
+-- ---------------------------------------------------------- fuel chest (we're sitting on it)
+local function onFuelChest()
+  local ok, b = turtle.inspectDown()
+  if not (ok and isChest(b.name)) then return false end
+  local okL, l = pcall(peripheral.call, "bottom", "list")
+  if not (okL and type(l) == "table") then return false end
+  for _, it in pairs(l) do if isFuelItem(it.name) then return true end end
+  return false
+end
+local function fillUp()
+  for _ = 1, 40 do
+    if turtle.getFuelLevel() >= CONF.fuelTarget then break end
+    local s
+    for i = 1, 16 do if turtle.getItemCount(i) == 0 then s = i; break end end
+    if not s then break end
+    turtle.select(s)
+    if not turtle.suckDown() then break end
+    while turtle.getFuelLevel() < CONF.fuelTarget and turtle.refuel(1) do end
+    if turtle.getItemCount(s) > 0 then turtle.dropDown() end
+  end
+  turtle.select(1)
+end
+
 -- ---------------------------------------------------------- moving
 local function lane() return G + CONF.laneUp + 2 * ((J and J.n or 1) - 1) end
 
@@ -80,8 +103,11 @@ local function step(kind, patience)
   local waited = 0
   while true do
     if turtle.getFuelLevel() == 0 then
-      status("OUT OF FUEL - put coal or charcoal in me"); sleep(10)
-      for s = 1, 16 do turtle.select(s); turtle.refuel() end
+      if onFuelChest() then fillUp()
+      else
+        status("OUT OF FUEL - put coal or charcoal in me"); sleep(10)
+        for s = 1, 16 do turtle.select(s); turtle.refuel() end
+      end
     else
       P.pend = { x = nx, y = ny, z = nz, fuel = turtle.getFuelLevel() }; savePos()
       if mv() then
@@ -362,7 +388,7 @@ local function work()
 end
 
 -- ---------------------------------------------------------- first start
-local function setup()
+local function setup(keepN)
   term.clear(); term.setCursorPos(1, 1)
   print("BAMBOO FARM setup")
   if not turtle.craft then error("I need a crafting table on one side (a CRAFTY turtle).", 0) end
@@ -398,25 +424,15 @@ local function setup()
     if fs.exists(POSFILE) then fs.delete(POSFILE) end
     error("", 0)
   end
-  local n
-  repeat
+  local n = keepN
+  while not (n and n >= 1 and n <= 3 and n == math.floor(n)) do
     write("Turtle number (1 = west strip, 2 = middle, 3 = east)? ")
     n = tonumber(read())
-  until n and n >= 1 and n <= 3 and n == math.floor(n)
+  end
+  print("Turtle " .. n)
   J = { n = n, lap = 1, idx = 1, map = {}, made = 0, active = 1, cols = buildColumns(n) }
   os.setComputerLabel("Bamboo " .. n)
   -- fuel up for setup: checking all four directions (and climbing anything in the way) takes a lot
-  local function fillUp()                                      -- (sitting on the fuel chest)
-    for _ = 1, 40 do
-      if turtle.getFuelLevel() >= CONF.fuelTarget then break end
-      local s = emptySlot(); if not s then break end
-      turtle.select(s)
-      if not turtle.suckDown() then break end
-      while turtle.getFuelLevel() < CONF.fuelTarget and turtle.refuel(1) do end
-      if turtle.getItemCount(s) > 0 then turtle.dropDown() end
-    end
-    turtle.select(1)
-  end
   fillUp()
   print("Fuel: " .. turtle.getFuelLevel())
   if turtle.getFuelLevel() < 3000 then
@@ -557,21 +573,16 @@ if shell and shell.getRunningProgram and fs.exists("startup.lua") then
   end
 end
 
--- picked up and put back on the fuel chest (lost, or out of fuel somewhere)? start over from here
-local function onFuelChest()
-  local ok, b = turtle.inspectDown()
-  if not (ok and isChest(b.name)) then return false end
-  local okL, l = pcall(peripheral.call, "bottom", "list")
-  if not (okL and type(l) == "table") then return false end
-  for _, it in pairs(l) do if isFuelItem(it.name) then return true end end
-  return false
+-- started up sitting on the fuel chest (just placed, or picked up and put back)? fuel up and set up again
+local keepN = J and J.n
+if onFuelChest() then
+  print("I'm on the fuel chest: fuelling up and setting up.")
+  fillUp()
+  if fs.exists(POSFILE) then fs.delete(POSFILE) end
+  if fs.exists(JOBFILE) then fs.delete(JOBFILE) end
+  P, J = nil, nil
 end
-if J and J.chests and P and onFuelChest() and not (P.x == J.chests.fuel.x and P.z == J.chests.fuel.z and P.y == G + 1) then
-  print("I'm sitting on the fuel chest: starting over.")
-  fs.delete(POSFILE); fs.delete(JOBFILE); P, J = nil, nil
-  sleep(1)
-end
-if not (J and J.chests and P) then setup() end
+if not (J and J.chests and P) then setup(keepN) end
 J.cols = buildColumns(J.n)
 show()
 work()
