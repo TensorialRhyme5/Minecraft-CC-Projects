@@ -405,17 +405,23 @@ local function setup()
   until n and n >= 1 and n <= 3 and n == math.floor(n)
   J = { n = n, lap = 1, idx = 1, map = {}, made = 0, active = 1, cols = buildColumns(n) }
   os.setComputerLabel("Bamboo " .. n)
-  -- fuel up for setup
-  for _ = 1, 10 do
-    if turtle.getFuelLevel() >= 2000 then break end
-    local s = emptySlot(); if not s then break end
-    turtle.select(s)
-    if not turtle.suckDown() then break end
-    while turtle.getFuelLevel() < 2000 and turtle.refuel(1) do end
-    if turtle.getItemCount(s) > 0 then turtle.dropDown() end
+  -- fuel up for setup: checking all four directions (and climbing anything in the way) takes a lot
+  local function fillUp()                                      -- (sitting on the fuel chest)
+    for _ = 1, 40 do
+      if turtle.getFuelLevel() >= CONF.fuelTarget then break end
+      local s = emptySlot(); if not s then break end
+      turtle.select(s)
+      if not turtle.suckDown() then break end
+      while turtle.getFuelLevel() < CONF.fuelTarget and turtle.refuel(1) do end
+      if turtle.getItemCount(s) > 0 then turtle.dropDown() end
+    end
+    turtle.select(1)
   end
-  turtle.select(1)
-  if turtle.getFuelLevel() < 1000 then error("Not enough fuel: put coal or charcoal in the fuel chest.", 0) end
+  fillUp()
+  print("Fuel: " .. turtle.getFuelLevel())
+  if turtle.getFuelLevel() < 3000 then
+    error("Not enough fuel: I need 3000 to set up (about 40 coal/charcoal in the fuel chest).", 0)
+  end
 
   -- which way do we face? Leave the chest, then try each guess: fly over the middle of the field and
   -- look down for bamboo (twice, at two spots). A wrong guess just means we were somewhere else.
@@ -438,6 +444,11 @@ local function setup()
   end
   local fits = {}
   for guess = 0, 3 do
+    if turtle.getFuelLevel() < 2500 then                      -- top up between tries: the fuel chest is where
+      goTo(F.x, G + 1, F.z)                                    -- we started, whichever way we really face
+      fillUp()
+      vert(lane(), 600)
+    end
     regard(guess)
     local all = true
     for _, sp in ipairs(spots) do
