@@ -444,6 +444,7 @@ local function setup(keepN)
   local F = { x = CONF.fuel.x, z = CONF.fuel.z }
   P = { x = F.x, y = G + 1, z = F.z, f = 0 }
   J.n = n
+  saveJob(); savePos()                                         -- (if we stop mid-setup we fly back here and start over)
   print("Leaving the fuel chest...")
   while not vert(lane(), 20) do print("Something above me, waiting..."); sleep(5) end
   print("Working out which way I'm facing...")
@@ -573,8 +574,18 @@ if shell and shell.getRunningProgram and fs.exists("startup.lua") then
   end
 end
 
--- started up sitting on the fuel chest (just placed, or picked up and put back)? fuel up and set up again
+-- stopped in the middle of setup (server restart, chunk unloaded...)? fly back to the fuel chest. Our
+-- position is always counted from the fuel chest, so we find it whichever way we turned out to face.
 local keepN = J and J.n
+if P and not (J and J.chests) and not onFuelChest() then
+  print("I stopped in the middle of setting up.")
+  print("Flying back to the fuel chest to start over...")
+  J = J or { n = 1 }
+  goTo(CONF.fuel.x, lane(), CONF.fuel.z, 600)
+  vert(G + 1, 600)
+  J = (keepN and { n = keepN }) or nil
+end
+-- started up sitting on the fuel chest (just placed, or picked up and put back)? fuel up and set up again
 if onFuelChest() then
   print("I'm on the fuel chest: fuelling up and setting up.")
   fillUp()
